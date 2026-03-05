@@ -1,0 +1,11 @@
+# Core dependencies
+opencv-python>=4.8.0
+ultralytics>=8.0.0
+easyocr>=1.7.0
+numpy>=1.24.0
+
+# PyTorch — CPU-only (default, works on Linux/Mac/Windows)
+# For GPU on Windows/Linux, replace with the CUDA version below:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0
+torchvision>=0.15.0
