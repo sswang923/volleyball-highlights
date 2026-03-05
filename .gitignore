@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Model weights (auto-downloaded at runtime)
+*.pt
+*.pth
+*.onnx
+
+# Output / scratch
+volleyball_output/
+stitched_*.mp4
+*_highlights.mp4
+*_index.json
+*_index.csv
+*.log
