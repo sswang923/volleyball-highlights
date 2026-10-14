@@ -28,6 +28,21 @@ Do the work through the tools; do not read raw logs, videos, or large JSON files
 7. **Measure** — `evaluate_game(game)` compares detections with the user's confirmed rallies
    (recall, precision, start/end error, point-winner accuracy) and with scoreboard checkpoints when present.
 
+## YouTube chapters and rally captions
+
+Games are uploaded unlisted as "Tyrants 16 Blue — <date> — Game <n>". To add a rally timeline:
+
+1. `youtube_chapters(game)` builds one chapter per rally (plus warm-up and set breaks) and a "Rallies"
+   caption track. Use the reviewed event log (default). Scores are only shown when every rally is confirmed —
+   auto point winners are wrong too often to publish; only pass `show_scores=True` if the user insists.
+2. `youtube_find_video("<date> — Game <n>")` to get the video id.
+3. `youtube_publish(game, video_id)` is a **dry run**: show the user the title, chapter count and whether
+   scores are shown. Call again with `apply=True` only after the user says to publish.
+
+If a YouTube tool says "not authorized for editing", the upload login can't edit videos. The user must
+sign in once themselves: in WSL, `python3 rally_lab/youtube_publish.py auth`, open the printed URL, allow access.
+Never handle their Google password or tokens.
+
 ## Ground rules
 
 - **Never overwrite reviewed labels.** `labels/<game>/event_log_<game>.json` is the user's golden data once it has

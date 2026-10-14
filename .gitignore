@@ -21,4 +21,4 @@ stitched_*.mp4
 
 # Secrets (YouTube OAuth)
 client_secrets.json
-youtube_token.pkl*
+youtube_token*.pkl*

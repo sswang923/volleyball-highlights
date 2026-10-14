@@ -302,5 +302,58 @@ def open_labeler(game: str) -> dict:
     return {"url": url, "status": "starting (first launch builds clip manifest; may take a minute)"}
 
 
+def _py_json(args: list, timeout=300) -> dict:
+    r = subprocess.run([SYS_PY, "-W", "ignore", *args], cwd=REPO, capture_output=True, text=True,
+                       env=_env(), timeout=timeout)
+    lines = [ln for ln in (r.stdout + "\n" + r.stderr).splitlines() if ln.startswith("{")]
+    if lines:
+        return json.loads(lines[-1])
+    return {"error": (r.stderr or r.stdout)[-600:]}
+
+
+@mcp.tool()
+def youtube_chapters(game: str, source: str = "event_log", show_scores: bool = False) -> dict:
+    """Build YouTube chapters (one per rally, for the description) and a rally caption track. Local only.
+
+    source: "event_log" (the user's reviewed labels, default) or "auto" (raw detections).
+    show_scores: add running scores to labels even if the rallies are not all confirmed.
+    """
+    key = _key(game)
+    if source not in ("event_log", "auto"):
+        raise ValueError("source must be event_log or auto")
+    args = ["rally_lab/youtube_chapters.py", "--key", key, "--source", source]
+    if show_scores:
+        args.append("--scores")
+    return _py_json(args)
+
+
+@mcp.tool()
+def youtube_find_video(query: str) -> dict:
+    """Find the user's uploaded videos whose title contains `query` (needs the edit authorization)."""
+    return _py_json(["rally_lab/youtube_publish.py", "find", "--query", query], timeout=120)
+
+
+@mcp.tool()
+def youtube_publish(game: str, video_id: str, source: str = "event_log", show_scores: bool = False,
+                    captions: bool = True, apply: bool = False) -> dict:
+    """Put rally chapters into a YouTube video's description and upload a "Rallies" caption track.
+
+    Dry run unless apply=True. Only set apply=True after the user has seen the dry-run result and
+    explicitly said to publish — this changes their public-facing video. Text outside the rally
+    block in the description is kept; re-publishing replaces just the block.
+    """
+    key = _key(game)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+        raise ValueError("video_id must be the 11-character YouTube id")
+    args = ["rally_lab/youtube_publish.py", "publish", "--key", key, "--video", video_id, "--source", source]
+    if show_scores:
+        args.append("--scores")
+    if not captions:
+        args.append("--no-captions")
+    if apply:
+        args.append("--apply")
+    return _py_json(args, timeout=180)
+
+
 if __name__ == "__main__":
     mcp.run()
