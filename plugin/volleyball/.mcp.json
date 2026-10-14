@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "volleyball": {
+      "command": "wsl",
+      "args": [
+        "-d", "Ubuntu", "--", "bash", "-lc",
+        "cd /mnt/c/Users/stanl/volleyball-highlights/volleyball_mcp && UV_PROJECT_ENVIRONMENT=$HOME/.venvs/volleyball-mcp exec ~/.local/bin/uv run --quiet server.py"
+      ]
+    }
+  }
+}

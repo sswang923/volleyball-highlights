@@ -18,3 +18,7 @@ stitched_*.mp4
 *_index.json
 *_index.csv
 *.log
+
+# Secrets (YouTube OAuth)
+client_secrets.json
+youtube_token.pkl*

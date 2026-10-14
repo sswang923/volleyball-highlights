@@ -1,0 +1,8 @@
+{
+  "name": "volleyball",
+  "version": "0.1.0",
+  "description": "Rally detection for DJI volleyball footage: stitch games, detect rallies/sets/points on the local GPU, review in the labeler.",
+  "author": {
+    "name": "sswang923"
+  }
+}

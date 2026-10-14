@@ -1,0 +1,13 @@
+{
+  "name": "volleyball-highlights",
+  "owner": {
+    "name": "sswang923"
+  },
+  "plugins": [
+    {
+      "name": "volleyball",
+      "source": "./plugin/volleyball",
+      "description": "Rally detection tools and skill for DJI volleyball footage"
+    }
+  ]
+}

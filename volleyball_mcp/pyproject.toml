@@ -1,0 +1,8 @@
+[project]
+name = "volleyball-mcp"
+version = "0.1.0"
+description = "MCP server exposing the volleyball rally-detection pipeline as tools"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.9,<2",
+]
