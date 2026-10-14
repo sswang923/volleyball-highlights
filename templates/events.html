@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>VOLLEY·CTRL — events · {{ game_key }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='labeller.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='events.css') }}" />
+</head>
+<body data-game-key="{{ game_key }}">
+  <header>
+    <div class="title">
+      <strong>VOLLEY·CTRL</strong>
+      <label class="video-picker">
+        <span class="muted mono" style="font-size:10px; letter-spacing:.14em">VIDEO</span>
+        <select id="video-select" title="Switch video"></select>
+      </label>
+    </div>
+    <div class="progress">
+      <span id="status-text">0 events</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="video-pane">
+      <div class="video-stage">
+        <video id="player" preload="auto" controls></video>
+        <div id="scorebug" class="scorebug pos-tc" data-pos="tc" style="display:none">
+          <div class="sb-main">
+            <div class="sb-side sb-home">
+              <span class="sb-name">HOME</span>
+              <span class="sb-num">0</span>
+            </div>
+            <span class="sb-dash">—</span>
+            <div class="sb-side sb-away">
+              <span class="sb-num">0</span>
+              <span class="sb-name">AWAY</span>
+            </div>
+          </div>
+          <div class="sb-sets">
+            <span class="sb-set-num home">0</span>
+            <span class="sb-set-label">SETS</span>
+            <span class="sb-set-num away">0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="clip-meta">
+        <span id="set-pill" class="pill">SET —</span>
+        <span id="point-pill" class="pill">RALLY —</span>
+        <span id="state-pill" class="pill">NO RALLY OPEN</span>
+        <span id="score-pill" class="pill score-pill" style="display:none">
+          <span class="home">0</span><span class="dash">·</span><span class="away">0</span>
+        </span>
+        <button id="btn-rally-only" class="toggle play-mode-btn">▶ Rallies Only <kbd>R</kbd></button>
+        <button id="btn-edit-teams" class="meta-icon-btn" title="Edit team names">✎ Teams</button>
+        <span class="spacer"></span>
+        <span id="now-time" class="mono">00:00:00</span>
+        <label class="rate-select">
+          Speed
+          <select id="rate-select">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+            <option value="3">3×</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="timeline-head">
+          <span class="tl-label">TIMELINE</span>
+          <span class="tl-zoom">
+            <button id="btn-zoom-out" title="Zoom out (−)" class="tl-btn">−</button>
+            <button id="btn-zoom-reset" title="Reset zoom (0)" class="tl-btn">⊡</button>
+            <button id="btn-zoom-in" title="Zoom in (+)" class="tl-btn">+</button>
+          </span>
+          <span class="tl-range mono" id="tl-range">FULL</span>
+          <span class="spacer"></span>
+          <span class="tl-label">SCOREBUG</span>
+          <span class="scorebug-picker" id="scorebug-picker">
+            <button class="sb-pos" data-pos="tl" title="Top-left">↖</button>
+            <button class="sb-pos" data-pos="tc" title="Top-center">↑</button>
+            <button class="sb-pos" data-pos="tr" title="Top-right">↗</button>
+            <button class="sb-pos" data-pos="bl" title="Bottom-left">↙</button>
+            <button class="sb-pos" data-pos="bc" title="Bottom-center">↓</button>
+            <button class="sb-pos" data-pos="br" title="Bottom-right">↘</button>
+            <button class="sb-pos sb-off" data-pos="off" title="Hide scorebug">OFF</button>
+          </span>
+        </div>
+        <div class="timeline-track" id="timeline-track">
+          <div id="timeline-cursor">
+            <div class="tl-score-now" id="tl-score-now"></div>
+          </div>
+        </div>
+        <div class="timeline-axis" id="timeline-axis"></div>
+      </div>
+
+      <div class="nav">
+        <button id="btn-game-start">Game ▶ <kbd>G</kbd></button>
+        <button id="btn-set-start">Set ▶ <kbd>S</kbd></button>
+        <button id="btn-point-toggle" class="primary">Rally ⇄ <kbd>␣</kbd></button>
+        <button id="btn-score-home" class="score-btn home">+ Home <kbd>W</kbd></button>
+        <button id="btn-score-away" class="score-btn away">+ Away <kbd>O</kbd></button>
+        <button id="btn-set-end">Set ◼ <kbd>⇧S</kbd></button>
+        <button id="btn-game-end">Game ◼ <kbd>⇧G</kbd></button>
+      </div>
+
+      <div class="nav">
+        <button id="btn-rewind">−5s <kbd>J</kbd></button>
+        <button id="btn-fwd">+5s <kbd>L</kbd></button>
+        <button id="btn-slower">◂◂ <kbd>[</kbd></button>
+        <button id="btn-faster">▸▸ <kbd>]</kbd></button>
+        <button id="btn-reset-rate">1× <kbd>\</kbd></button>
+        <span class="spacer"></span>
+        <button id="btn-export">⤓ Export JSON</button>
+      </div>
+    </section>
+
+    <aside class="event-pane">
+      <div class="pane-tabs">
+        <button class="pane-tab" data-tab="events">Events</button>
+        <button class="pane-tab active" data-tab="rallies">Rallies</button>
+        <button class="pane-tab" data-tab="highlights">Highlights</button>
+        <span class="pane-tab-spacer"></span>
+        <span id="pane-stat" class="pane-stat muted mono">0</span>
+      </div>
+      <div class="pane-content">
+        <div class="tab-pane" id="tab-events" style="display:none">
+          <div id="event-list"></div>
+        </div>
+        <div class="tab-pane" id="tab-rallies"></div>
+        <div class="tab-pane" id="tab-highlights" style="display:none"></div>
+      </div>
+      <details class="help">
+        <summary>Hotkey reference</summary>
+        <ul>
+          <li><kbd>␣</kbd> rally start ⇄ rally end</li>
+          <li><kbd>W</kbd> / <kbd>O</kbd> end rally + home / away scored</li>
+          <li><kbd>R</kbd> toggle rally-only playback</li>
+          <li><kbd>B</kbd> cycle scorebug position</li>
+          <li><kbd>G</kbd> game start · <kbd>⇧G</kbd> game end</li>
+          <li><kbd>S</kbd> set start · <kbd>⇧S</kbd> set end</li>
+          <li><kbd>⌫</kbd> delete last event</li>
+          <li><kbd>U</kbd> / <kbd>⇧U</kbd> bump last event ∓0.5s</li>
+          <li><kbd>+</kbd> <kbd>−</kbd> zoom timeline · <kbd>0</kbd> reset zoom</li>
+          <li>scroll on timeline = zoom · shift+scroll or drag = pan</li>
+          <li><kbd>[</kbd> <kbd>]</kbd> slower / faster · <kbd>\</kbd> reset 1×</li>
+          <li><kbd>J</kbd> <kbd>L</kbd> seek ∓5s · <kbd>⇧</kbd>+ for ∓10s</li>
+          <li><kbd>H</kbd> <kbd>;</kbd> seek ∓30s · <kbd>,</kbd> <kbd>.</kbd> frame step</li>
+          <li><kbd>P</kbd> play/pause</li>
+          <li>Drag any marker on timeline OR row in sidebar to adjust time</li>
+        </ul>
+      </details>
+    </aside>
+  </main>
+
+  <script>window.DURATION_S = {{ duration_s }};</script>
+  <script src="{{ url_for('static', filename='events.js') }}"></script>
+</body>
+</html>

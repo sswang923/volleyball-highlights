@@ -872,11 +872,12 @@ def auto_detect_scoreboard_roi(
     video_path: Path,
     reader,
     n_samples: int = 15,
-    strip_height: int = 100,
+    n_strips: int = 6,
 ) -> Optional[Tuple[int, int, int, int]]:
     """
-    Sample frames from the middle of the video and find which horizontal strip
-    (top or bottom) most consistently contains a volleyball score.
+    Sample frames from the middle of the video, divide the frame into
+    horizontal strips, and find the strip that most consistently contains
+    a volleyball score (two numbers 0–30).
     Returns (x, y, w, h) or None.
     """
     try:
@@ -897,8 +898,11 @@ def auto_detect_scoreboard_roi(
     end_f   = 3 * total // 4
     step    = max(1, (end_f - start_f) // n_samples)
 
+    strip_h = frame_h // n_strips
+    strips  = [(i, i * strip_h, strip_h) for i in range(n_strips)]
+
     votes: Counter = Counter()
-    log.info("  Auto-detecting scoreboard region ...")
+    log.info(f"  Auto-detecting scoreboard region ({n_strips} horizontal strips) ...")
 
     frame_idx = start_f
     while frame_idx < end_f:
@@ -906,23 +910,25 @@ def auto_detect_scoreboard_roi(
         ret, frame = cap.read()
         if not ret:
             break
-        for label, y0 in [("top", 0), ("bottom", frame_h - strip_height)]:
-            strip = frame[y0: y0 + strip_height, :]
+        for idx, y0, h in strips:
+            strip = frame[y0: y0 + h, :]
             texts = reader.readtext(strip, detail=0, allowlist="0123456789-: ")
             if _parse_volleyball_score(texts):
-                votes[label] += 1
+                votes[idx] += 1
         frame_idx += step
 
     cap.release()
 
     if not votes:
-        log.info("  Scoreboard not auto-detected in top/bottom strips — scores will be unknown")
+        log.info("  Scoreboard not auto-detected — scores will be unknown")
+        log.info("  Tip: use --scoreboard-roi x,y,w,h to specify the region manually")
         return None
 
-    best, count = votes.most_common(1)[0]
-    y0 = 0 if best == "top" else frame_h - strip_height
-    log.info(f"  Scoreboard detected in {best} strip ({count}/{n_samples} frames)")
-    return (0, y0, frame_w, strip_height)
+    best_idx, count = votes.most_common(1)[0]
+    y0 = best_idx * strip_h
+    log.info(f"  Scoreboard detected in strip {best_idx} (y={y0}–{y0+strip_h}) "
+             f"({count}/{n_samples} frames)")
+    return (0, y0, frame_w, strip_h)
 
 
 def _read_score(frame, reader, roi: Tuple[int, int, int, int]) -> Optional[Tuple[int, int]]:
@@ -942,6 +948,275 @@ def _read_score(frame, reader, roi: Tuple[int, int, int, int]) -> Optional[Tuple
     return _parse_volleyball_score(texts)
 
 
+def _read_score_consensus(
+    cap: "cv2.VideoCapture",
+    fps: float,
+    duration: float,
+    reader,
+    roi: Tuple[int, int, int, int],
+    end_s: float,
+) -> Optional[Tuple[int, int]]:
+    """Sample 4 frames in [end_s+0.5, end_s+2.5] and return the majority score.
+
+    Requires at least 2 frames to agree; returns None when no consensus exists.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return None
+    sample_times = [end_s + 0.5 + i * (2.0 / 3.0) for i in range(4)]
+    votes: List[Tuple[int, int]] = []
+    for t in sample_times:
+        t = min(t, duration - 0.1)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(t * fps))
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        score = _read_score(frame, reader, roi)
+        if score is not None:
+            votes.append(score)
+    if not votes:
+        return None
+    counts = Counter(votes)
+    best, best_n = counts.most_common(1)[0]
+    return best if best_n >= 2 else None
+
+
+def detect_whistles(video_path: Path) -> List[float]:
+    """Detect referee whistle events in a video's audio track.
+
+    Uses ffmpeg to pipe 16kHz mono PCM, then applies a sliding 50ms FFT
+    window.  A frame is flagged when the 2–4.5 kHz band carries >= 35% of
+    total energy AND the band energy exceeds the 95th percentile.
+    Consecutive flagged frames within 0.15 s are merged into events;
+    the peak timestamp of each event is returned.
+
+    Pure numpy — no scipy dependency.  Returns [] if video has no audio.
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        log.info("  Whistle detection: numpy not available — skipping")
+        return []
+
+    log.info(f"  Whistle detection: {video_path.name} ...")
+
+    SR  = 16000
+    WIN = int(SR * 0.05)   # 800 samples = 50 ms window
+    HOP = WIN // 2         # 50% overlap
+
+    ffmpeg_bin = "ffmpeg"
+    for candidate in [os.path.expanduser("~/.local/bin/ffmpeg"), "ffmpeg"]:
+        if os.path.isfile(candidate):
+            ffmpeg_bin = candidate
+            break
+
+    pipe_cmd = [
+        ffmpeg_bin, "-i", str(video_path),
+        "-vn",
+        "-ar", str(SR), "-ac", "1",
+        "-f", "s16le", "pipe:1",
+    ]
+    proc = subprocess.Popen(pipe_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    raw = proc.stdout.read()
+    proc.wait()
+
+    if not raw:
+        log.info("  Whistle detection: no audio track — skipping")
+        return []
+
+    audio   = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    hann    = np.hanning(WIN)
+    freqs   = np.fft.rfftfreq(WIN, d=1.0 / SR)
+    lo_bin  = int(np.searchsorted(freqs, 2000.0))
+    hi_bin  = int(np.searchsorted(freqs, 4500.0))
+
+    band_energies: List[float] = []
+    timestamps:    List[float] = []
+    ratios:        List[float] = []
+
+    pos = 0
+    while pos + WIN <= len(audio):
+        window   = audio[pos: pos + WIN] * hann
+        spectrum = np.abs(np.fft.rfft(window)) ** 2
+        total_e  = float(spectrum.sum()) + 1e-12
+        band_e   = float(spectrum[lo_bin:hi_bin].sum())
+        band_energies.append(band_e)
+        ratios.append(band_e / total_e)
+        timestamps.append((pos + WIN / 2) / SR)
+        pos += HOP
+
+    if not band_energies:
+        return []
+
+    band_arr  = np.array(band_energies, dtype=np.float32)
+    abs_thresh = float(np.percentile(band_arr, 95))
+    ratio_thresh = 0.35
+
+    # Merge consecutive flagged frames into events
+    whistle_times: List[float] = []
+    in_event     = False
+    event_start  = 0.0
+    event_peak_e = 0.0
+    event_peak_t = 0.0
+
+    for t, band_e, ratio in zip(timestamps, band_energies, ratios):
+        flagged = band_e >= abs_thresh and ratio >= ratio_thresh
+        if flagged and not in_event:
+            in_event = True
+            event_start = event_peak_t = t
+            event_peak_e = band_e
+        elif flagged and in_event:
+            if band_e > event_peak_e:
+                event_peak_e = band_e
+                event_peak_t = t
+        elif not flagged and in_event:
+            duration = t - event_start
+            if 0.15 <= duration <= 2.0:
+                whistle_times.append(event_peak_t)
+                log.debug(f"    Whistle @ {_fmt_time(event_peak_t)}  dur={duration:.2f}s  ratio={ratio:.2f}")
+            in_event = False
+
+    if in_event and timestamps:
+        duration = timestamps[-1] - event_start
+        if 0.15 <= duration <= 2.0:
+            whistle_times.append(event_peak_t)
+
+    log.info(f"  Whistle detection: {len(whistle_times)} event(s) found")
+    return whistle_times
+
+
+def detect_game_start(
+    video_path: Path,
+    reader,
+    scoreboard_roi: Tuple[int, int, int, int],
+    sample_interval: float = 10.0,
+    max_scan_s: float = 2700.0,   # scan up to first 45 min
+) -> float:
+    """
+    Find the timestamp where the game officially starts by scanning for the
+    first scoreboard reading of 0-0.
+
+    Returns the timestamp in seconds, or 0.0 if not detected.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return 0.0
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return 0.0
+
+    fps          = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration     = total_frames / fps
+    end_s        = min(max_scan_s, duration)
+    frame_step   = max(1, int(fps * sample_interval))
+
+    log.info(f"  Auto-detecting game start (scanning first {_fmt_time(end_s)} for 0-0 score) ...")
+
+    frame_idx = 0
+    while frame_idx < int(end_s * fps):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
+        if not ret:
+            break
+        score = _read_score(frame, reader, scoreboard_roi)
+        if score == (0, 0):
+            t = frame_idx / fps
+            log.info(f"  Game start detected at {_fmt_time(t)} (score 0-0)")
+            cap.release()
+            return t
+        frame_idx += frame_step
+
+    cap.release()
+    log.info("  Game start not auto-detected — scanning from beginning")
+    return 0.0
+
+
+def filter_rallies_by_ball(
+    video_map: Dict[str, Path],
+    point_timeline: List[dict],
+    yolo_model,
+    conf: float = 0.2,
+    min_ball_pct: float = 0.15,
+    sample_interval: float = 0.5,
+) -> List[dict]:
+    """
+    Filter the point timeline by requiring the ball (YOLO class 32) to appear
+    in at least min_ball_pct of sampled frames within each rally segment.
+
+    Segments with no ball visible are almost certainly false positives
+    (camera panning, warmup, timeouts, etc.).
+    """
+    try:
+        import cv2
+    except ImportError:
+        log.warning("Ball filter: opencv not available — skipping")
+        return point_timeline
+
+    BALL_CLASS = 32
+
+    # Cache open VideoCaptures per source file
+    caps: Dict[str, "cv2.VideoCapture"] = {}
+
+    def _get_cap(filename: str) -> Optional["cv2.VideoCapture"]:
+        if filename not in caps:
+            src = video_map.get(filename)
+            if src is None:
+                return None
+            caps[filename] = cv2.VideoCapture(str(src))
+        return caps[filename]
+
+    log.info(f"  Ball confirmation: checking {len(point_timeline)} segments ...")
+    filtered  = []
+    n_removed = 0
+
+    for pt in point_timeline:
+        cap = _get_cap(pt["video_file"])
+        if cap is None or not cap.isOpened():
+            filtered.append(pt)   # can't check — keep it
+            continue
+
+        fps        = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        frame_step = max(1, int(fps * sample_interval))
+        start_f    = int(pt["start_s"] * fps)
+        end_f      = int(pt["end_s"]   * fps)
+
+        frames_checked    = 0
+        frames_with_ball  = 0
+        frame_idx         = start_f
+
+        while frame_idx <= end_f:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            preds = yolo_model(frame, classes=[BALL_CLASS], conf=conf, verbose=False)
+            for r in preds:
+                if len(r.boxes) > 0:
+                    frames_with_ball += 1
+                    break
+            frames_checked += 1
+            frame_idx += frame_step
+
+        ball_pct = frames_with_ball / frames_checked if frames_checked > 0 else 0.0
+
+        if ball_pct >= min_ball_pct:
+            filtered.append(pt)
+            log.debug(f"    Point {pt['point']:>3}: KEEP   ball={ball_pct:.0%}")
+        else:
+            n_removed += 1
+            log.info(f"    Point {pt['point']:>3}: REMOVE  ball={ball_pct:.0%} < {min_ball_pct:.0%}")
+
+    for cap in caps.values():
+        cap.release()
+
+    log.info(f"  Ball filter: kept {len(filtered)}/{len(point_timeline)}, removed {n_removed}")
+    return filtered
+
+
 def detect_rallies(
     video_path: Path,
     motion_threshold: float = 3.0,
@@ -953,12 +1228,19 @@ def detect_rallies(
     reader=None,
     scoreboard_roi: Optional[Tuple[int, int, int, int]] = None,
     time_offset: float = 0.0,
+    start_offset_s: float = 0.0,    # seconds to skip at start (pregame/warmup)
+    court_roi: Optional[Tuple[int, int, int, int]] = None,
+    whistle_gate_s: float = 0.0,    # >0: drop segments with no whistle within this many s of the start
 ) -> Tuple[List[Tuple[float, float]], List[dict]]:
     """
     Detect volleyball rally periods using frame-to-frame motion.
 
-    motion_threshold: mean absolute pixel diff (on 320×180 downsampled frame)
+    motion_threshold: 90th-percentile pixel diff (on 320×180 downsampled frame)
                       that separates active play from dead time.
+    court_roi: 'x,y,w,h' in source pixels — motion is measured only inside this
+               region, so bench/spectator/adjacent-court movement is ignored.
+    whistle_gate_s: rallies start on a serve whistle; if > 0, segments whose
+               start has no detected whistle within the window are dropped.
     Returns (segments, point_timeline) where timestamps are relative to this file.
     point_timeline entries also carry abs_start using time_offset.
     """
@@ -969,35 +1251,78 @@ def detect_rallies(
         log.error("opencv-python required for rally detection")
         return [], []
 
+    # Use cv2 only to get video metadata (fps / duration)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open {video_path}")
-
     fps          = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration     = total_frames / fps
-    frame_step   = max(1, int(fps * scan_interval))
+    cap.release()  # motion scan uses ffmpeg pipe below, not OpenCV
 
-    log.info(f"  Detecting rallies: {video_path.name} ({_fmt_time(duration)}, every {scan_interval}s)")
+    out_fps = 1.0 / scan_interval   # e.g. 2.0 fps for 0.5s interval
+    scan_duration = duration - start_offset_s
+    n_expected = int(scan_duration * out_fps)
+    scan_from  = f" from {_fmt_time(start_offset_s)}" if start_offset_s > 0 else ""
+    log.info(
+        f"  Detecting rallies: {video_path.name} ({_fmt_time(duration)}{scan_from}, "
+        f"every {scan_interval}s ≈ {n_expected} samples)"
+    )
+
+    # Use ffmpeg to extract downsampled grayscale frames at the sample rate.
+    # This is far faster than OpenCV random-seeking into a large SMB file:
+    # ffmpeg reads sequentially, hardware-decodes internally, and outputs only
+    # the frames we need at 320×180 grayscale.
+    ffmpeg_bin = "ffmpeg"
+    for candidate in [os.path.expanduser("~/.local/bin/ffmpeg"), "ffmpeg"]:
+        if os.path.isfile(candidate):
+            ffmpeg_bin = candidate
+            break
+
+    vf = f"fps={out_fps}"
+    if court_roi:
+        cx, cy, cw, ch = court_roi
+        vf += f",crop={cw}:{ch}:{cx}:{cy}"
+        log.info(f"  Court ROI: motion measured in {cw}x{ch}+{cx}+{cy} only")
+    vf += ",scale=320:180"
+
+    pipe_cmd = [
+        ffmpeg_bin,
+        *(["-ss", str(start_offset_s)] if start_offset_s > 0 else []),
+        "-i", str(video_path),
+        "-vf", vf,
+        "-pix_fmt", "gray",
+        "-vcodec", "rawvideo",
+        "-f", "rawvideo", "pipe:1",
+    ]
+    proc = subprocess.Popen(pipe_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
     motion_data: List[Tuple[float, float]] = []
-    prev_gray = None
-    frame_idx = 0
+    prev_arr = None
+    frame_count = 0
+    FRAME_BYTES = 320 * 180
+    last_log = -1
 
-    while frame_idx < total_frames:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
-        if not ret:
+    while True:
+        raw = proc.stdout.read(FRAME_BYTES)
+        if not raw or len(raw) < FRAME_BYTES:
             break
-        small = cv2.resize(frame, (320, 180))
-        gray  = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        if prev_gray is not None:
-            motion = float(np.mean(np.abs(gray - prev_gray)))
-            motion_data.append((frame_idx / fps, motion))
-        prev_gray = gray
-        frame_idx += frame_step
+        arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)
+        timestamp = frame_count / out_fps + start_offset_s
+        if prev_arr is not None:
+            diff = np.abs(arr - prev_arr)
+            motion = float(np.percentile(diff, 90))
+            motion_data.append((timestamp, motion))
+        prev_arr = arr
+        frame_count += 1
 
-    cap.release()
+        bucket = int(timestamp // 300)
+        if bucket != last_log:
+            pct = (timestamp - start_offset_s) / max(1, scan_duration) * 100
+            log.info(f"  Rally scan: {pct:.0f}%  ({_fmt_time(timestamp)})")
+            last_log = bucket
+
+    proc.wait()
 
     if not motion_data:
         return [], []
@@ -1022,52 +1347,168 @@ def detect_rallies(
     if in_seg:
         raw_segs.append((seg_start, smoothed[-1][0]))
 
-    # Pad, merge short gaps, filter short rallies
-    padded = [(max(0.0, s - pre_pad), min(duration, e + post_pad)) for s, e in raw_segs]
-    merged: List[List[float]] = []
-    for s, e in sorted(padded):
-        if e - s < min_rally_s:
-            continue
-        if merged and s < merged[-1][1] + min_dead_s:
-            merged[-1][1] = max(merged[-1][1], e)
+    # Pad and merge nearby raw segments, tracking the total ACTIVE
+    # (above-threshold) time inside each merged segment. A merged segment
+    # qualifies as a rally only if its active time reaches min_rally_s:
+    # padding can no longer promote a half-second motion blip to a rally,
+    # while a real rally split by a brief motion dip is still bridged.
+    groups: List[List[float]] = []   # [padded_start, padded_end, active_s]
+    for s, e in sorted(raw_segs):
+        ps = max(start_offset_s, s - pre_pad)
+        pe = min(duration, e + post_pad)
+        if groups and ps < groups[-1][1] + min_dead_s:
+            groups[-1][1] = max(groups[-1][1], pe)
+            groups[-1][2] += e - s
         else:
-            merged.append([s, e])
-    segments = [(s, e) for s, e in merged]
+            groups.append([ps, pe, e - s])
+
+    segments = [(ps, pe) for ps, pe, active in groups if active >= min_rally_s]
+    if len(groups) != len(segments):
+        log.info(
+            f"  Dropped {len(groups) - len(segments)} low-activity segment(s) "
+            f"(< {min_rally_s}s of motion)"
+        )
 
     log.info(f"  → {len(segments)} rally segment(s) detected")
+
+    # Detect whistle events once for the whole file (used for boundary
+    # snapping and, if enabled, whistle gating)
+    whistle_times = detect_whistles(video_path)
+
+    # Whistle gate: every real rally starts on a serve whistle. Drop segments
+    # whose start has no whistle nearby (huddles, timeouts, warmup motion).
+    if whistle_gate_s > 0:
+        if whistle_times:
+            gated = [
+                (s, e) for s, e in segments
+                if any(abs(wt - (s + pre_pad)) <= whistle_gate_s for wt in whistle_times)
+            ]
+            log.info(
+                f"  Whistle gate (±{whistle_gate_s:.0f}s): kept {len(gated)}/{len(segments)} segment(s)"
+            )
+            segments = gated
+        else:
+            log.warning("  Whistle gate requested but no whistles detected — gate skipped")
+
+    def _snap_to_whistle(t: float, window: float = 1.5) -> Optional[float]:
+        best: Optional[float] = None
+        best_d = window + 1.0
+        for wt in whistle_times:
+            d = abs(wt - t)
+            if d <= window and d < best_d:
+                best_d = d
+                best = wt
+        return best
 
     # Build point timeline, optionally reading score after each rally
     point_timeline: List[dict] = []
     if segments:
         cap2 = cv2.VideoCapture(str(video_path))
+        set_number  = 1
+        prev_score: Optional[Tuple[int, int]] = None
+
         for i, (start_s, end_s) in enumerate(segments):
+            # ── Whistle snapping ──────────────────────────────────────────────
+            whistle_start_t = _snap_to_whistle(start_s)
+            whistle_end_t   = _snap_to_whistle(end_s)
+            snapped_start   = whistle_start_t if whistle_start_t is not None else start_s
+            snapped_end     = whistle_end_t   if whistle_end_t   is not None else end_s
+
+            # ── Consensus score reading ───────────────────────────────────────
             score: Optional[Tuple[int, int]] = None
             if reader and scoreboard_roi:
-                # Read score just after the rally ends (score updates after point)
-                check_t = min(end_s + 1.0, duration - 0.1)
-                cap2.set(cv2.CAP_PROP_POS_FRAMES, int(check_t * fps))
-                ret, frame = cap2.read()
-                if ret:
-                    score = _read_score(frame, reader, scoreboard_roi)
+                score = _read_score_consensus(
+                    cap2, fps, duration, reader, scoreboard_roi, snapped_end
+                )
+
+            # ── Score monotonicity, set tracking, delta validation ────────────
+            score_valid = False
+            if score is not None:
+                if prev_score is None:
+                    # First readable score in this file — accept unconditionally
+                    score_valid = True
+                else:
+                    a0, b0 = prev_score
+                    a1, b1 = score
+                    delta_a, delta_b = a1 - a0, b1 - b0
+                    if (delta_a == 1 and delta_b == 0) or (delta_a == 0 and delta_b == 1):
+                        # Exactly +1 on one side — clean point
+                        score_valid = True
+                    elif a1 <= 2 and b1 <= 2 and (a0 > 2 or b0 > 2):
+                        # Score reset to near 0 → new set
+                        set_number += 1
+                        score_valid = True
+                        log.info(f"    ↑ Set {set_number} detected at {_fmt_time(snapped_start)}")
+                    # else: score decreased (not a reset) or jumped — OCR noise, reject
+
+                if score_valid:
+                    prev_score = score
+
             score_str = f"{score[0]}-{score[1]}" if score else "unknown"
+            flag = "" if score_valid else " ⚠"
             log.info(
-                f"    [Point {i+1:>3}] {_fmt_time(start_s)} → {_fmt_time(end_s)}"
-                f"  ({end_s-start_s:.0f}s)  score: {score_str}"
+                f"    [S{set_number} Pt{i+1:>3}] {_fmt_time(snapped_start)} → {_fmt_time(snapped_end)}"
+                f"  ({snapped_end - snapped_start:.0f}s)  score: {score_str}{flag}"
+                + (f"  W↑{_fmt_time(whistle_start_t)}" if whistle_start_t is not None else "")
+                + (f"  W↓{_fmt_time(whistle_end_t)}"   if whistle_end_t   is not None else "")
             )
             point_timeline.append({
-                "point":      i + 1,
-                "video_file": video_path.name,
-                "start":      _fmt_time(start_s),
-                "end":        _fmt_time(end_s),
-                "abs_start":  _fmt_time(time_offset + start_s),
-                "start_s":    round(start_s, 2),
-                "end_s":      round(end_s, 2),
-                "duration_s": round(end_s - start_s, 1),
-                "score":      score_str,
+                "point":           i + 1,
+                "set":             set_number,
+                "video_file":      video_path.name,
+                "start":           _fmt_time(snapped_start),
+                "end":             _fmt_time(snapped_end),
+                "abs_start":       _fmt_time(time_offset + snapped_start),
+                "abs_end":         _fmt_time(time_offset + snapped_end),
+                "start_s":         round(snapped_start, 2),
+                "end_s":           round(snapped_end, 2),
+                "abs_start_s":     round(time_offset + snapped_start, 2),
+                "abs_end_s":       round(time_offset + snapped_end, 2),
+                "duration_s":      round(snapped_end - snapped_start, 1),
+                "score":           score_str,
+                "score_valid":     score_valid,
+                "whistle_start_t": round(whistle_start_t, 3) if whistle_start_t is not None else None,
+                "whistle_end_t":   round(whistle_end_t,   3) if whistle_end_t   is not None else None,
             })
         cap2.release()
 
     return segments, point_timeline
+
+
+def _ass_time(secs: float) -> str:
+    """Seconds → ASS timestamp H:MM:SS.cc"""
+    cs = int(round(secs * 100))
+    return f"{cs // 360000}:{cs % 360000 // 6000:02d}:{cs % 6000 // 100:02d}.{cs % 100:02d}"
+
+
+def write_score_ass(events: List[Tuple[float, float, str]], ass_path: Path) -> Path:
+    """
+    Write an ASS subtitle file showing the set/score label during each rally.
+    events: (start_s, end_s, label) in compiled-video time.
+    Styled as a boxed overlay in the top-left corner.
+    """
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1920\nPlayResY: 1080\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Score,DejaVu Sans,48,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        "&H60000000,-1,0,0,0,100,100,0,0,3,8,0,7,40,40,30,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Text\n"
+    )
+    with open(ass_path, "w") as f:
+        f.write(header)
+        for start_s, end_s, label in events:
+            f.write(
+                f"Dialogue: 0,{_ass_time(start_s)},{_ass_time(end_s)},"
+                f"Score,,0,0,0,{label}\n"
+            )
+    return ass_path
 
 
 def create_rally_compilation(
@@ -1075,11 +1516,17 @@ def create_rally_compilation(
     point_timeline: List[dict],
     output_path: Path,
     crf: int = 22,
+    score_overlay: bool = False,
 ) -> Optional[Path]:
     """
     Cut every rally segment from its source file, concatenate into a single
     video, and embed one MP4 chapter per point (labelled with score if known).
     Dead time between points is completely removed.
+
+    score_overlay=True burns a set/score label into the video (one re-encode
+    pass with the libass subtitles filter). Otherwise a sidecar .ass file with
+    the same labels is written next to the MP4 (VLC auto-loads it) — no
+    re-encode needed.
     """
     if not point_timeline:
         log.warning("No rally segments — compilation not created.")
@@ -1091,6 +1538,9 @@ def create_rally_compilation(
         clip_paths: List[Path] = []
         compiled_s = 0.0
         chapter_data: List[Tuple[float, str]] = []   # (start_in_compiled, title)
+        score_events: List[Tuple[float, float, str]] = []  # (start, end, label) in compiled time
+        display_score = "0-0"   # score *entering* each rally (OCR reads it after the point)
+        cur_set: Optional[int] = None
 
         for pt in point_timeline:
             src = video_map.get(pt["video_file"])
@@ -1116,6 +1566,14 @@ def create_rally_compilation(
 
             score_label = f" ({pt['score']})" if pt["score"] != "unknown" else ""
             chapter_data.append((compiled_s, f"Point {pt['point']}{score_label}  {pt['abs_start']}"))
+
+            if pt["set"] != cur_set:
+                cur_set = pt["set"]
+                display_score = "0-0"
+            score_events.append((compiled_s, compiled_s + dur, f"Set {cur_set}   {display_score}"))
+            if pt.get("score_valid") and pt["score"] != "unknown":
+                display_score = pt["score"]
+
             compiled_s += dur
             clip_paths.append(clip_out)
 
@@ -1139,6 +1597,30 @@ def create_rally_compilation(
             str(tmp_concat),
         ], check=True, stderr=subprocess.DEVNULL)
 
+        # Score overlay: burn the set/score labels into the video, or write
+        # them as a sidecar .ass that VLC auto-loads (no re-encode).
+        if score_overlay and score_events:
+            ass_path = write_score_ass(score_events, Path(tmpdir) / "score.ass")
+            # Quote the path for the filtergraph parser (tmpdir has no quotes)
+            burned = Path(tmpdir) / "burned.mp4"
+            log.info(f"  Burning score overlay ({len(score_events)} rallies, re-encoding) ...")
+            result = subprocess.run([
+                "ffmpeg", "-y", "-i", str(tmp_concat),
+                "-vf", f"subtitles=filename='{ass_path.as_posix()}'",
+                "-c:v", "libx264", "-preset", "fast", "-crf", str(crf),
+                "-c:a", "copy",
+                str(burned),
+            ], capture_output=True, text=True)
+            if result.returncode == 0:
+                tmp_concat = burned
+            else:
+                log.warning("Score overlay burn failed; writing sidecar .ass instead")
+                log.debug(result.stderr[-400:])
+                write_score_ass(score_events, output_path.with_suffix(".ass"))
+        elif score_events:
+            sidecar = write_score_ass(score_events, output_path.with_suffix(".ass"))
+            log.info(f"  Score subtitles → {sidecar.name}  (VLC auto-loads; use --score-overlay to burn in)")
+
         # Build chapter metadata
         meta_path = Path(tmpdir) / "chapters.txt"
         with open(meta_path, "w") as f:
@@ -1151,18 +1633,27 @@ def create_rally_compilation(
                     f"title={title}\n\n"
                 )
 
-        # Inject chapters
-        result = subprocess.run([
-            "ffmpeg", "-y",
-            "-i", str(tmp_concat),
-            "-f", "ffmetadata", "-i", str(meta_path),
-            "-map", "0", "-map_metadata", "1",
-            "-c", "copy",
-            str(output_path),
-        ], capture_output=True, text=True)
+        # Inject chapters — try two approaches for compatibility
+        chapter_ok = False
+        for cmd in [
+            # Approach 1: explicit ffmetadata format flag
+            ["ffmpeg", "-y", "-i", str(tmp_concat),
+             "-f", "ffmetadata", "-i", str(meta_path),
+             "-map", "0", "-map_metadata", "1", "-c", "copy", str(output_path)],
+            # Approach 2: no format flag (auto-detect from file content)
+            ["ffmpeg", "-y", "-i", str(tmp_concat),
+             "-i", str(meta_path),
+             "-map", "0", "-map_metadata", "1", "-c", "copy", str(output_path)],
+        ]:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                chapter_ok = True
+                break
+            log.debug(f"Chapter injection attempt failed: {result.stderr[-200:]}")
 
-        if result.returncode != 0:
+        if not chapter_ok:
             log.warning("Chapter injection failed; saving without chapters")
+            log.debug(result.stderr[-400:])
             import shutil
             shutil.copy(str(tmp_concat), str(output_path))
 
@@ -1180,12 +1671,15 @@ def export_point_timeline(
     json_path = output_dir / f"point_timeline_{game_key}.json"
     csv_path  = output_dir / f"point_timeline_{game_key}.csv"
 
+    score_readable    = sum(1 for p in point_timeline if p["score"] != "unknown")
+    score_valid_count = sum(1 for p in point_timeline if p.get("score_valid", False))
     data = {
-        "game":           game_key,
-        "generated_at":   datetime.now().isoformat(),
-        "point_count":    len(point_timeline),
-        "score_readable": sum(1 for p in point_timeline if p["score"] != "unknown"),
-        "points":         point_timeline,
+        "game":              game_key,
+        "generated_at":      datetime.now().isoformat(),
+        "point_count":       len(point_timeline),
+        "score_readable":    score_readable,
+        "score_valid_count": score_valid_count,
+        "points":            point_timeline,
     }
     json_path.write_text(json.dumps(data, indent=2))
 
@@ -1195,8 +1689,213 @@ def export_point_timeline(
             writer.writeheader()
             writer.writerows(point_timeline)
 
-    log.info(f"Point timeline → {json_path}  ({data['score_readable']}/{len(point_timeline)} scores read)")
+    log.info(
+        f"Point timeline → {json_path}  "
+        f"({score_readable}/{len(point_timeline)} scores read, "
+        f"{score_valid_count} score-delta valid)"
+    )
     return json_path, csv_path
+
+
+def build_event_log(
+    point_timeline: List[dict],
+    game_duration_s: float = 0.0,
+) -> List[dict]:
+    """
+    Convert a flat point_timeline into a chronological event log.
+
+    Event types (in order of emission):
+        game_start   — beginning of the game footage (t=0)
+        set_start    — first point of each set begins
+        point_start  — a rally begins
+        point_end    — a rally ends (score updated)
+        set_end      — last point of a set ends
+        game_end     — end of game footage
+
+    Each event dict:
+        seq          sequential index (0-based)
+        event        event type string
+        t_s          absolute game-relative timestamp in seconds
+        t            HH:MM:SS formatted
+        set          set number (None for game_start/game_end)
+        point_in_set point index within the current set (None for set/game events)
+        score        score string "X-Y" at this moment (None if unavailable)
+        video_file   source file name (None for game_start/game_end when unambiguous)
+    """
+    if not point_timeline:
+        return []
+
+    events: List[dict] = []
+
+    def _ev(event, t_s, set_=None, point_in_set=None, score=None, video_file=None):
+        events.append({
+            "event":        event,
+            "t_s":          round(t_s, 2),
+            "t":            _fmt_time(t_s),
+            "set":          set_,
+            "point_in_set": point_in_set,
+            "score":        score,
+            "video_file":   video_file,
+        })
+
+    # game_start at the very beginning of the footage
+    _ev("game_start", 0.0, video_file=point_timeline[0]["video_file"])
+
+    current_set: Optional[int] = None
+    point_in_set = 0
+    last_pt: Optional[dict] = None
+
+    for pt in point_timeline:
+        set_num = pt["set"]
+
+        # Detect set transition
+        if set_num != current_set:
+            if current_set is not None and last_pt is not None:
+                _ev("set_end", last_pt["abs_end_s"],
+                    set_=current_set, score=last_pt["score"],
+                    video_file=last_pt["video_file"])
+            current_set = set_num
+            point_in_set = 0
+            _ev("set_start", pt["abs_start_s"],
+                set_=set_num, video_file=pt["video_file"])
+
+        point_in_set += 1
+
+        _ev("point_start", pt["abs_start_s"],
+            set_=set_num, point_in_set=point_in_set,
+            score=pt["score"], video_file=pt["video_file"])
+
+        _ev("point_end", pt["abs_end_s"],
+            set_=set_num, point_in_set=point_in_set,
+            score=pt["score"], video_file=pt["video_file"])
+
+        last_pt = pt
+
+    # Close the final set
+    if last_pt is not None:
+        _ev("set_end", last_pt["abs_end_s"],
+            set_=current_set, score=last_pt["score"],
+            video_file=last_pt["video_file"])
+
+    # game_end at end of last point (or provided game duration)
+    game_end_t = game_duration_s if game_duration_s > last_pt["abs_end_s"] else last_pt["abs_end_s"]
+    _ev("game_end", game_end_t,
+        score=last_pt["score"], video_file=last_pt["video_file"])
+
+    _ORDER = {"game_start": 0, "set_start": 1, "point_start": 2,
+              "point_end": 3, "set_end": 4, "game_end": 5}
+    events.sort(key=lambda e: (e["t_s"], _ORDER.get(e["event"], 9)))
+    for i, e in enumerate(events):
+        e["seq"] = i
+
+    return events
+
+
+def export_event_log(
+    game_key: str,
+    events: List[dict],
+    output_dir: Path,
+) -> Tuple[Path, Path]:
+    """Write event log JSON + CSV."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / f"event_log_{game_key}.json"
+    csv_path  = output_dir / f"event_log_{game_key}.csv"
+
+    data = {
+        "game":         game_key,
+        "generated_at": datetime.now().isoformat(),
+        "event_count":  len(events),
+        "events":       events,
+    }
+    json_path.write_text(json.dumps(data, indent=2))
+
+    if events:
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(events[0].keys()))
+            writer.writeheader()
+            writer.writerows(events)
+
+    set_count   = len({e["set"] for e in events if e["event"] == "set_start"})
+    point_count = sum(1 for e in events if e["event"] == "point_start")
+    log.info(
+        f"Event log → {json_path}  "
+        f"({set_count} set(s), {point_count} point(s), {len(events)} total events)"
+    )
+    return json_path, csv_path
+
+
+def export_event_srt(
+    game_key: str,
+    events: List[dict],
+    output_dir: Path,
+    game_label: str = "",
+) -> Path:
+    """
+    Write a SubRip (.srt) subtitle file from an event log.
+
+    Subtitle layout:
+      - game_start / game_end   : 5-second display, centred label
+      - set_start  / set_end    : 4-second display
+      - point_start → point_end : spans the full rally duration
+      - point_end               : 2-second "score flash" right after each rally
+    """
+    def _srt_ts(t_s: float) -> str:
+        ms  = int(round((t_s % 1) * 1000))
+        s   = int(t_s)
+        h, r = divmod(s, 3600)
+        m, sec = divmod(r, 60)
+        return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
+
+    # Build a lookup: for each point_start find its matching point_end
+    by_set_pt: dict = {}
+    for e in events:
+        if e["event"] in ("point_start", "point_end"):
+            key = (e["set"], e["point_in_set"])
+            by_set_pt.setdefault(key, {})[e["event"]] = e
+
+    entries: List[Tuple[float, float, str]] = []   # (start_s, end_s, text)
+
+    # One entry per rally spanning its full duration
+    for key, pair in by_set_pt.items():
+        ps = pair.get("point_start")
+        pe = pair.get("point_end")
+        if ps and pe:
+            score_part = f"  |  {pe['score']}" if pe["score"] and pe["score"] != "unknown" else ""
+            label = f"Set {ps['set']}  ·  Point {ps['point_in_set']}{score_part}"
+            entries.append((ps["t_s"], pe["t_s"], label))
+            # Brief score flash for 2 s after rally ends
+            if pe["score"] and pe["score"] != "unknown":
+                entries.append((pe["t_s"], pe["t_s"] + 2.0, pe["score"]))
+
+    # Set and game boundary markers
+    for e in events:
+        if e["event"] == "game_start":
+            title = game_label if game_label else game_key
+            entries.append((e["t_s"], e["t_s"] + 5.0, f"GAME START\n{title}"))
+        elif e["event"] == "set_start":
+            entries.append((e["t_s"], e["t_s"] + 4.0, f"SET {e['set']}"))
+        elif e["event"] == "set_end":
+            score_part = f"  {e['score']}" if e["score"] and e["score"] != "unknown" else ""
+            entries.append((e["t_s"], e["t_s"] + 4.0, f"END OF SET {e['set']}{score_part}"))
+        elif e["event"] == "game_end":
+            score_part = f"  {e['score']}" if e["score"] and e["score"] != "unknown" else ""
+            entries.append((e["t_s"], e["t_s"] + 5.0, f"GAME OVER{score_part}"))
+
+    entries.sort(key=lambda x: x[0])
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    srt_path = output_dir / f"event_log_{game_key}.srt"
+
+    lines: List[str] = []
+    for idx, (start_s, end_s, text) in enumerate(entries, start=1):
+        lines.append(str(idx))
+        lines.append(f"{_srt_ts(start_s)} --> {_srt_ts(end_s)}")
+        lines.append(text)
+        lines.append("")
+
+    srt_path.write_text("\n".join(lines), encoding="utf-8")
+    log.info(f"Event SRT  → {srt_path}  ({len(entries)} subtitle entries)")
+    return srt_path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1308,8 +2007,8 @@ def main():
     parser.add_argument(
         "--player-number", "-p",
         type=int,
-        required=True,
-        help="Jersey number of the player to track (e.g. 12)",
+        default=None,
+        help="Jersey number of the player to track (e.g. 12). Optional when only --rally-cut is used.",
     )
     parser.add_argument(
         "--output-dir", "-o",
@@ -1407,13 +2106,43 @@ def main():
         ),
     )
     parser.add_argument(
+        "--score-overlay",
+        action="store_true",
+        help=(
+            "Burn a 'Set N  X-Y' label into the rally compilation video "
+            "(re-encodes; slower). Without this flag the same labels are "
+            "written as a sidecar .ass subtitle file that VLC auto-loads."
+        ),
+    )
+    parser.add_argument(
         "--motion-threshold",
         type=float,
-        default=3.0,
+        default=15.0,
         help=(
-            "Mean pixel-diff threshold (on 320×180 frame) to classify a frame "
-            "as 'active play' for rally detection (default: 3.0). "
-            "Raise if static backgrounds trigger false rallies; lower if rallies are missed."
+            "90th-percentile pixel-diff threshold (on 320×180 downsampled frame) "
+            "to classify a frame as active play (default: 15.0). "
+            "Raise if dead time is triggering false rallies; lower if rallies are missed. "
+            "Typical range for volleyball drone footage: 10–25."
+        ),
+    )
+    parser.add_argument(
+        "--court-roi",
+        default=None,
+        help=(
+            "Court region as 'x,y,w,h' pixels in the source frame. Motion is "
+            "measured only inside it, so benches, spectators, and adjacent "
+            "courts don't trigger false rallies. Omit to use the full frame."
+        ),
+    )
+    parser.add_argument(
+        "--whistle-gate",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "Drop rally segments whose start has no detected whistle within "
+            "this many seconds (rallies start on the serve whistle). "
+            "Good starting value: 4. Default 0 = off."
         ),
     )
     parser.add_argument(
@@ -1427,6 +2156,39 @@ def main():
         type=float,
         default=3.0,
         help="Minimum dead-time gap in seconds before starting a new rally segment (default: 3.0)",
+    )
+    parser.add_argument(
+        "--pregame-skip",
+        type=float,
+        default=0,
+        help=(
+            "Skip this many minutes at the start of each game to ignore warmup/pregame. "
+            "If 0 (default), game start is auto-detected from the first 0-0 scoreboard reading."
+        ),
+    )
+    parser.add_argument(
+        "--ball-confirm",
+        action="store_true",
+        help=(
+            "After motion-based rally detection, filter out segments where the ball "
+            "is not visible in at least --min-ball-pct of sampled frames. "
+            "Reduces false positives from camera movement and dead-ball periods."
+        ),
+    )
+    parser.add_argument(
+        "--ball-conf",
+        type=float,
+        default=0.2,
+        help="Ball detection confidence threshold for --ball-confirm (default: 0.2)",
+    )
+    parser.add_argument(
+        "--min-ball-pct",
+        type=float,
+        default=0.15,
+        help=(
+            "Minimum fraction of frames that must contain a ball to keep a rally segment "
+            "when --ball-confirm is set (default: 0.15 = 15%%)"
+        ),
     )
     parser.add_argument(
         "--scoreboard-roi",
@@ -1494,11 +2256,29 @@ def main():
         compiled_path = output_dir / "compiled_all_games.mp4"
         create_compiled_video(game_groups, compiled_path)
 
-    detector = PlayerDetector(
-        args.player_number,
-        confidence_threshold=args.confidence,
-        gpu=args.gpu,
-    )
+    if args.player_number is not None:
+        detector = PlayerDetector(
+            args.player_number,
+            confidence_threshold=args.confidence,
+            gpu=args.gpu,
+        )
+    else:
+        # No player tracking — load EasyOCR only (needed for scoreboard / club detection)
+        try:
+            import easyocr as _easyocr
+        except ImportError:
+            sys.exit("easyocr is required: pip install easyocr")
+
+        class _MinimalDetector:
+            """Stub that loads EasyOCR + YOLOv8n without player scanning."""
+            def __init__(self, gpu: bool):
+                log.info("Loading EasyOCR (no player scanning) ...")
+                self.reader = _easyocr.Reader(["en"], gpu=gpu)
+                log.info("Loading YOLOv8n (for ball confirmation) ...")
+                from ultralytics import YOLO as _YOLO
+                self.yolo = _YOLO("yolov8n.pt")
+
+        detector = _MinimalDetector(gpu=args.gpu)
 
     # 3. Process each game independently for player highlights
     for game_key, video_files in sorted(game_groups.items()):
@@ -1529,97 +2309,111 @@ def main():
         else:
             scan_sources = video_files
 
-        # 3. Scan, tracking cumulative time offset across files
-        all_detections: List[Detection] = []
-        cumulative_offset = 0.0
+        # 3. Player scanning (skipped when --player-number not provided)
+        segments: List[Segment] = []
+        total_footage_s = 0.0
 
-        for src in scan_sources:
-            if args.workers > 1:
-                dets = parallel_scan(
-                    src,
-                    player_number=args.player_number,
-                    confidence=args.confidence,
-                    gpu=args.gpu,
-                    scan_interval=args.scan_interval,
-                    time_offset=cumulative_offset,
-                    n_workers=args.workers,
-                )
-            else:
-                dets = scan_video(
-                    src,
-                    detector,
-                    scan_interval=args.scan_interval,
-                    time_offset=cumulative_offset,
-                )
-            all_detections.extend(dets)
-            try:
-                cumulative_offset += get_video_duration(src)
-            except Exception:
-                pass
+        if args.player_number is not None:
+            all_detections: List[Detection] = []
+            cumulative_offset = 0.0
 
-        total_footage_s = cumulative_offset
+            for src in scan_sources:
+                if args.workers > 1:
+                    dets = parallel_scan(
+                        src,
+                        player_number=args.player_number,
+                        confidence=args.confidence,
+                        gpu=args.gpu,
+                        scan_interval=args.scan_interval,
+                        time_offset=cumulative_offset,
+                        n_workers=args.workers,
+                    )
+                else:
+                    dets = scan_video(
+                        src,
+                        detector,
+                        scan_interval=args.scan_interval,
+                        time_offset=cumulative_offset,
+                    )
+                all_detections.extend(dets)
+                try:
+                    cumulative_offset += get_video_duration(src)
+                except Exception:
+                    pass
 
-        # 4. Build segments
-        segments = build_segments(
-            all_detections,
-            gap_threshold=args.gap_threshold,
-            clip_padding=args.clip_padding,
-        )
+            total_footage_s = cumulative_offset
 
-        log.info(
-            f"\nPlayer #{args.player_number} in {game_key}: "
-            f"{len(segments)} segment(s) / {len(all_detections)} detection(s)"
-        )
-        if segments:
-            total_play = sum(s.duration for s in segments)
-            log.info(
-                f"  Total detected play time: {_fmt_time(total_play)}  "
-                f"of {_fmt_time(total_footage_s)} footage"
+            # 4. Build segments
+            segments = build_segments(
+                all_detections,
+                gap_threshold=args.gap_threshold,
+                clip_padding=args.clip_padding,
             )
-            for i, s in enumerate(segments):
+
+            log.info(
+                f"\nPlayer #{args.player_number} in {game_key}: "
+                f"{len(segments)} segment(s) / {len(all_detections)} detection(s)"
+            )
+            if segments:
+                total_play = sum(s.duration for s in segments)
                 log.info(
-                    f"    [{i+1:>3}] {s.video_file}  "
-                    f"{_fmt_time(s.start_time)} → {_fmt_time(s.end_time)}  "
-                    f"({s.duration:.0f}s)  detections: {len(s.detections)}"
+                    f"  Total detected play time: {_fmt_time(total_play)}  "
+                    f"of {_fmt_time(total_footage_s)} footage"
                 )
-        else:
-            log.info(
-                f"  Player #{args.player_number} NOT detected in {game_key}.\n"
-                f"  Possible reasons:\n"
-                f"    • Player sat out this game\n"
-                f"    • Camera angle too high / players too small for OCR\n"
-                f"    • Try --confidence 0.25 or --scan-interval 0.5"
-            )
+                for i, s in enumerate(segments):
+                    log.info(
+                        f"    [{i+1:>3}] {s.video_file}  "
+                        f"{_fmt_time(s.start_time)} → {_fmt_time(s.end_time)}  "
+                        f"({s.duration:.0f}s)  detections: {len(s.detections)}"
+                    )
+            else:
+                log.info(
+                    f"  Player #{args.player_number} NOT detected in {game_key}.\n"
+                    f"  Possible reasons:\n"
+                    f"    • Player sat out this game\n"
+                    f"    • Camera angle too high / players too small for OCR\n"
+                    f"    • Try --confidence 0.25 or --scan-interval 0.5"
+                )
 
-        # 5. Export index
-        videos_scanned = [v.name for v in (scan_sources if args.stitch else video_files)]
-        export_index(
-            player_number=args.player_number,
-            match_date=game_key,
-            club=club,
-            videos_scanned=videos_scanned,
-            total_footage_s=total_footage_s,
-            segments=segments,
-            output_dir=game_output,
-        )
-
-        # 6. Create highlight reel
-        if not args.no_highlights and segments:
-            club_slug = re.sub(r"[^\w]", "_", club).strip("_").lower()
-            reel_path = game_output / f"player_{args.player_number}_{game_key}_{club_slug}_highlights.mp4"
-            create_highlight_reel(
-                video_map=video_map,
-                segments=segments,
-                output_path=reel_path,
+            # 5. Export index
+            videos_scanned = [v.name for v in (scan_sources if args.stitch else video_files)]
+            export_index(
                 player_number=args.player_number,
-                crf=args.crf,
-                zoom=args.zoom,
-                zoom_factor=args.zoom_factor,
+                match_date=game_key,
+                club=club,
+                videos_scanned=videos_scanned,
+                total_footage_s=total_footage_s,
+                segments=segments,
+                output_dir=game_output,
             )
+
+            # 6. Create highlight reel
+            if not args.no_highlights and segments:
+                club_slug = re.sub(r"[^\w]", "_", club).strip("_").lower()
+                reel_path = game_output / f"player_{args.player_number}_{game_key}_{club_slug}_highlights.mp4"
+                create_highlight_reel(
+                    video_map=video_map,
+                    segments=segments,
+                    output_path=reel_path,
+                    player_number=args.player_number,
+                    crf=args.crf,
+                    zoom=args.zoom,
+                    zoom_factor=args.zoom_factor,
+                )
 
         # 7. Rally cut — detect rally periods, build point timeline + compilation
         if args.rally_cut:
             log.info(f"\nRally detection for {game_key} ...")
+
+            court_roi: Optional[Tuple[int, int, int, int]] = None
+            if args.court_roi:
+                try:
+                    court_roi = tuple(int(x) for x in args.court_roi.split(","))  # type: ignore
+                    if len(court_roi) != 4:
+                        raise ValueError
+                except ValueError:
+                    log.warning(f"  Invalid --court-roi '{args.court_roi}' (need x,y,w,h) — using full frame")
+                    court_roi = None
 
             # Parse or auto-detect scoreboard ROI (once per game)
             scoreboard_roi: Optional[Tuple[int, int, int, int]] = None
@@ -1634,11 +2428,24 @@ def main():
                     scan_sources[0], detector.reader
                 )
 
+            # Determine pregame offset — manual override takes precedence,
+            # otherwise auto-detect from the first 0-0 scoreboard reading.
+            game_start_s = 0.0
+            if args.pregame_skip > 0:
+                game_start_s = args.pregame_skip * 60.0
+                log.info(f"  Pregame skip: {args.pregame_skip} min ({_fmt_time(game_start_s)})")
+            elif scoreboard_roi:
+                game_start_s = detect_game_start(
+                    scan_sources[0], detector.reader, scoreboard_roi
+                )
+
             all_rally_segs: List[Tuple[float, float]] = []
             all_points: List[dict] = []
             cumulative_offset = 0.0
 
-            for src in scan_sources:
+            for i, src in enumerate(scan_sources):
+                # Only apply pregame skip to the first file; game is underway in subsequent files
+                file_start_offset = game_start_s if i == 0 else 0.0
                 segs, pts = detect_rallies(
                     video_path=src,
                     motion_threshold=args.motion_threshold,
@@ -1650,6 +2457,9 @@ def main():
                     reader=detector.reader,
                     scoreboard_roi=scoreboard_roi,
                     time_offset=cumulative_offset,
+                    start_offset_s=file_start_offset,
+                    court_roi=court_roi,
+                    whistle_gate_s=args.whistle_gate,
                 )
                 # Re-number points across all files in this game
                 for pt in pts:
@@ -1661,7 +2471,30 @@ def main():
                 except Exception:
                     pass
 
+            # Optionally filter out false-positive segments with no ball visible
+            if args.ball_confirm and all_points:
+                log.info(f"\nFiltering {len(all_points)} segments with ball detection ...")
+                all_points = filter_rallies_by_ball(
+                    video_map=video_map,
+                    point_timeline=all_points,
+                    yolo_model=detector.yolo,
+                    conf=args.ball_conf,
+                    min_ball_pct=args.min_ball_pct,
+                )
+                # Re-number after filtering
+                for idx, pt in enumerate(all_points):
+                    pt["point"] = idx + 1
+
             export_point_timeline(game_key, all_points, game_output)
+
+            event_log = build_event_log(all_points, game_duration_s=cumulative_offset)
+            export_event_log(game_key, event_log, game_output)
+            export_event_srt(
+                game_key,
+                event_log,
+                game_output,
+                game_label=f"{game_key}  ({club})" if 'club' in dir() else game_key,
+            )
 
             rally_path = game_output / f"rally_compilation_{game_key}.mp4"
             create_rally_compilation(
@@ -1669,6 +2502,7 @@ def main():
                 point_timeline=all_points,
                 output_path=rally_path,
                 crf=args.crf,
+                score_overlay=args.score_overlay,
             )
 
     log.info("\nAll done.")
