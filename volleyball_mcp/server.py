@@ -311,9 +311,11 @@ def open_review(game: str = "") -> dict:
     key = _key(game) if game else ""
     port = int(os.environ.get("VB_REVIEW_PORT", "8770"))
     url = f"http://localhost:{port}/" + (f"g/{key}" if key else "")
+    import socket
+    with socket.socket() as s:
+        if s.connect_ex(("127.0.0.1", port)) == 0:     # already serving (started by us or by hand)
+            return {"url": url, "status": "already running"}
     state_f = WORK / "review_app.json"
-    if state_f.exists() and _alive(json.load(open(state_f))["pid"]):
-        return {"url": url, "status": "already running"}
     log = WORK / "review_app.log"
     with open(log, "w") as fh:
         p = subprocess.Popen([SYS_PY, "review_app.py", "--host", "127.0.0.1", "--port", str(port)], cwd=REPO,
