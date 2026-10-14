@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rally Review</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #dddad3;
+  --auto: #e0a43a; --ok: #2f9e5b; --del: #b8b4ab; --sel: #2563eb; --game: #8b5cf6; --head: #e11d48;
+  --btn: #efede8; --btn-ink: #1d1d1f;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141416; --panel: #1e1e21; --ink: #ececee; --muted: #9a9aa2; --line: #34343a;
+          --auto: #d6a03f; --ok: #3fb672; --del: #55555c; --sel: #5b8cff; --game: #a78bfa; --head: #fb7185;
+          --btn: #2a2a2f; --btn-ink: #ececee; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--sel); }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 40px; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+header h1 { font-size: 18px; margin: 0; }
+#saveState { margin-left: auto; font-size: 13px; color: var(--muted); }
+video { width: 100%; max-height: 62vh; background: #000; border-radius: 8px; display: block; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.timeline { position: relative; height: 34px; background: var(--btn); border-radius: 6px; cursor: pointer; overflow: hidden; touch-action: none; }
+.zoom { position: relative; height: 54px; background: var(--btn); border-radius: 6px; overflow: hidden; touch-action: none; margin-top: 8px; }
+.seg { position: absolute; top: 6px; bottom: 6px; border-radius: 3px; background: var(--auto); opacity: .9; }
+.seg.ok { background: var(--ok); }
+.seg.deleted { background: repeating-linear-gradient(45deg, var(--del), var(--del) 4px, transparent 4px, transparent 8px); opacity: .7; }
+.seg.sel { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
+.mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--game); z-index: 3; }
+.head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--head); z-index: 4; pointer-events: none; }
+.handle { position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px; z-index: 5; cursor: ew-resize; display: flex; justify-content: center; }
+.handle::after { content: ""; width: 4px; height: 100%; background: var(--sel); border-radius: 2px; }
+.tick { position: absolute; bottom: 0; font-size: 10px; color: var(--muted); transform: translateX(-50%); pointer-events: none; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+button { background: var(--btn); color: var(--btn-ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font: inherit; font-size: 14px; cursor: pointer; min-height: 38px; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--ok); color: #fff; border-color: transparent; }
+button.danger { color: #c2410c; }
+button.on { outline: 2px solid var(--sel); }
+.sel-title { font-weight: 600; }
+.times { font-variant-numeric: tabular-nums; color: var(--muted); }
+.legend { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+#list { max-height: 320px; overflow: auto; margin-top: 6px; }
+.item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-variant-numeric: tabular-nums; }
+.item.sel { background: color-mix(in srgb, var(--sel) 14%, transparent); }
+.item.deleted { opacity: .5; text-decoration: line-through; }
+.chip { font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--auto); color: #1d1d1f; }
+.chip.ok { background: var(--ok); color: #fff; }
+.chip.deleted { background: var(--del); }
+.games a { display: block; padding: 10px 0; border-bottom: 1px solid var(--line); text-decoration: none; }
+.help { font-size: 12px; color: var(--muted); margin-top: 8px; }
+kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+@media (max-width: 640px) { .wrap { padding: 8px 16px 40px; } button { padding: 8px 9px; } .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+{% if not game %}
+  <header><h1>Rally review</h1></header>
+  <div class="panel games">
+    {% for g in games %}
+      <a href="/g/{{ g.key }}"><b>{{ g.key }}</b> — {{ g.rallies }} rallies, {{ g.ok }} checked <span class="times">({{ g.source or "no detections yet" }})</span></a>
+    {% else %}
+      <p>No stitched games found.</p>
+    {% endfor %}
+  </div>
+{% else %}
+  <header>
+    <a href="/">← games</a><h1>{{ game }}</h1>
+    <span id="progress" class="times"></span>
+    <span id="saveState">loading…</span>
+  </header>
+
+  <video id="v" src="/video/{{ game }}" preload="metadata" controls playsinline></video>
+
+  <div class="panel">
+    <div class="timeline" id="tl"></div>
+    <div class="zoom" id="zoom"></div>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--auto)"></span>to check</span>
+      <span><span class="dot" style="background:var(--ok)"></span>looks right</span>
+      <span><span class="dot" style="background:var(--del)"></span>not a rally</span>
+      <span><span class="dot" style="background:var(--game)"></span>game start/end</span>
+      <span>Bottom strip: ±40 s around the playhead — drag the blue handles to move start/end.</span>
+    </div>
+    <div class="row">
+      <button id="prev">⏮ Prev</button>
+      <button id="back5">−5s</button>
+      <button id="play">▶ Play</button>
+      <button id="fwd5">+5s</button>
+      <button id="next">Next ⏭</button>
+      <button id="speed">1×</button>
+      <button id="reviewMode" title="Play each rally, pause at its end">Review mode</button>
+      <button id="undo">↶ Undo</button>
+    </div>
+  </div>
+
+  <div class="panel" id="selPanel">
+    <div><span class="sel-title" id="selTitle">No rally selected</span> <span class="times" id="selTimes"></span></div>
+    <div class="row">
+      <button id="playRally">▶ Play rally</button>
+      <button id="ok" class="primary">✓ Looks right</button>
+      <button id="del" class="danger">✗ Not a rally</button>
+    </div>
+    <div class="row">
+      <span class="times">Start</span>
+      <button data-nudge="start,-1">−1</button><button data-nudge="start,-0.2">−.2</button>
+      <button id="startNow">⇤ = now</button>
+      <button data-nudge="start,0.2">+.2</button><button data-nudge="start,1">+1</button>
+    </div>
+    <div class="row">
+      <span class="times">End&nbsp;&nbsp;</span>
+      <button data-nudge="end,-1">−1</button><button data-nudge="end,-0.2">−.2</button>
+      <button id="endNow">⇥ = now</button>
+      <button data-nudge="end,0.2">+.2</button><button data-nudge="end,1">+1</button>
+    </div>
+    <div class="row">
+      <span class="times">Point</span>
+      <button data-win="home">Tyrants</button><button data-win="away">Opponent</button><button data-win="">?</button>
+      <span class="times">Set</span><button id="setDown">−</button><span id="setNum">1</span><button id="setUp">+</button>
+      <button id="split">Split at now</button>
+      <button id="merge">Merge with next</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="margin-top:0">
+      <button id="add">＋ Add rally at now</button>
+      <button id="gameStart">Game start = now</button>
+      <button id="gameEnd">Game end = now</button>
+      <span class="times" id="gameTimes"></span>
+    </div>
+    <div class="row">
+      <button id="fAll" class="on">All</button><button id="fTodo">To check</button>
+      <span class="times" id="counts"></span>
+    </div>
+    <div id="list"></div>
+    <div class="help hide-sm">
+      Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
+      <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
+      <kbd>S</kbd> split · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+    </div>
+  </div>
+{% endif %}
+</div>
+
+{% if game %}
+<script>
+const GAME = {{ game|tojson }};
+const v = document.getElementById("v");
+const $ = (id) => document.getElementById(id);
+let data = { rallies: [], game_start: null, game_end: null }, dur = 1, sel = -1;
+let undoStack = [], dragging = false, saveTimer = null, filter = "all", reviewMode = false, stopAt = null;
+const ZOOM_HALF = 40;
+
+const fmt = (t) => { if (t == null) return "—"; t = Math.max(0, t);
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = (t % 60).toFixed(1).padStart(4, "0");
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + s; };
+
+function sorted() { data.rallies.sort((a, b) => a.start - b.start); }
+function numbering() {             // rally number within its set, ignoring deleted
+  const n = {}, out = new Map();
+  for (const r of data.rallies) if (r.status !== "deleted") { n[r.set] = (n[r.set] || 0) + 1; out.set(r, n[r.set]); }
+  return out;
+}
+function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
+function change(fn) { snapshot(); fn(); sorted(); render(); queueSave(); }
+
+async function load() {
+  const r = await fetch(`/api/${GAME}/rallies`); const d = await r.json();
+  data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end };
+  dur = d.duration || 1; sorted();
+  $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
+  const first = data.rallies.findIndex(r => r.status === "auto");
+  select(first >= 0 ? first : 0, true);
+}
+function queueSave() { $("saveState").textContent = "saving…"; clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); }
+async function save() {
+  try {
+    const r = await fetch(`/api/${GAME}/rallies`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const d = await r.json();
+    $("saveState").textContent = d.ok ? `saved ${d.saved_at.slice(11)}` : "save failed";
+  } catch (e) { $("saveState").textContent = "save failed — retrying"; setTimeout(save, 3000); }
+}
+
+function select(i, seek) {
+  if (!data.rallies.length) { sel = -1; render(); return; }
+  sel = Math.max(0, Math.min(i, data.rallies.length - 1));
+  if (seek) v.currentTime = Math.max(0, data.rallies[sel].start - 1.5);
+  render();
+  const el = document.querySelector(`.item[data-i="${sel}"]`); if (el) el.scrollIntoView({ block: "nearest" });
+}
+const cur = () => data.rallies[sel];
+function step(dir) {               // next/prev, skipping deleted
+  let i = sel + dir;
+  while (i >= 0 && i < data.rallies.length && data.rallies[i].status === "deleted") i += dir;
+  if (i >= 0 && i < data.rallies.length) { select(i, true); if (reviewMode) playRally(); }
+}
+function playRally() { const r = cur(); if (!r) return; v.currentTime = Math.max(0, r.start - 1); stopAt = r.end + 1; v.play(); }
+
+function render() {
+  const nums = numbering();
+  // overview timeline
+  const tl = $("tl"); tl.innerHTML = "";
+  data.rallies.forEach((r, i) => {
+    const d = document.createElement("div");
+    d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
+    d.style.left = (r.start / dur * 100) + "%"; d.style.width = Math.max(0.15, (r.end - r.start) / dur * 100) + "%";
+    tl.appendChild(d);
+  });
+  for (const t of [data.game_start, data.game_end]) if (t != null) {
+    const m = document.createElement("div"); m.className = "mark"; m.style.left = (t / dur * 100) + "%"; tl.appendChild(m); }
+  const h = document.createElement("div"); h.className = "head"; h.id = "tlHead"; tl.appendChild(h);
+  renderZoom();
+  // selection panel
+  const r = cur();
+  if (r) {
+    $("selTitle").textContent = `Set ${r.set} · Rally ${nums.get(r) || "—"}` + (r.status === "ok" ? " ✓" : r.status === "deleted" ? " (not a rally)" : "");
+    $("selTimes").textContent = `${fmt(r.start)} → ${fmt(r.end)}  (${(r.end - r.start).toFixed(1)} s)`;
+    $("setNum").textContent = r.set;
+    document.querySelectorAll("[data-win]").forEach(b => b.classList.toggle("on", (r.winner || "") === b.dataset.win));
+  }
+  $("gameTimes").textContent = `game ${fmt(data.game_start)} → ${fmt(data.game_end)}`;
+  // list
+  const live = data.rallies.filter(x => x.status !== "deleted");
+  const okc = live.filter(x => x.status === "ok").length;
+  $("counts").textContent = `${live.length} rallies · ${okc} checked · ${live.length - okc} to check`;
+  $("progress").textContent = `${okc}/${live.length} checked`;
+  const list = $("list"); list.innerHTML = "";
+  data.rallies.forEach((x, i) => {
+    if (filter === "todo" && x.status !== "auto") return;
+    const d = document.createElement("div");
+    d.className = "item" + (i === sel ? " sel" : "") + (x.status === "deleted" ? " deleted" : "");
+    d.dataset.i = i;
+    const label = x.status === "ok" ? "checked" : x.status === "deleted" ? "removed" : "to check";
+    const win = x.winner === "home" ? " · Tyrants" : x.winner === "away" ? " · Opp" : "";
+    d.innerHTML = `<span>S${x.set} R${nums.get(x) || "–"}</span><span>${fmt(x.start)} → ${fmt(x.end)}${win}</span><span class="chip ${x.status}">${label}</span>`;
+    d.onclick = () => select(i, true);
+    list.appendChild(d);
+  });
+}
+
+function renderZoom() {
+  if (dragging) return;   // the strip would recenter under the pointer mid-drag
+  const z = $("zoom"); z.innerHTML = "";
+  const c = v.currentTime || 0, lo = c - ZOOM_HALF, span = 2 * ZOOM_HALF;
+  const X = (t) => ((t - lo) / span * 100) + "%";
+  for (let t = Math.ceil(lo / 10) * 10; t < lo + span; t += 10) {
+    const k = document.createElement("div"); k.className = "tick"; k.style.left = X(t); k.textContent = fmt(t).replace(/\.\d$/, ""); z.appendChild(k);
+  }
+  data.rallies.forEach((r, i) => {
+    if (r.end < lo || r.start > lo + span) return;
+    const d = document.createElement("div");
+    d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
+    d.style.left = X(r.start); d.style.width = ((r.end - r.start) / span * 100) + "%"; d.style.bottom = "16px";
+    d.onclick = (e) => { e.stopPropagation(); select(i, false); };
+    z.appendChild(d);
+  });
+  const r = cur();
+  if (r && r.status !== "deleted") for (const edge of ["start", "end"]) {
+    if (r[edge] < lo || r[edge] > lo + span) continue;
+    const hd = document.createElement("div"); hd.className = "handle"; hd.style.left = X(r[edge]);
+    hd.onpointerdown = (e) => dragHandle(e, edge, lo, span);
+    z.appendChild(hd);
+  }
+  const h = document.createElement("div"); h.className = "head"; h.style.left = "50%"; z.appendChild(h);
+}
+
+function dragHandle(e, edge, lo, span) {
+  e.preventDefault(); e.stopPropagation();
+  const z = $("zoom"), rect = z.getBoundingClientRect(), r = cur();
+  snapshot(); dragging = true;
+  const move = (ev) => {
+    let t = lo + (ev.clientX - rect.left) / rect.width * span;
+    if (edge === "start") t = Math.min(t, r.end - 0.5); else t = Math.max(t, r.start + 0.5);
+    r[edge] = Math.round(t * 10) / 10; v.currentTime = r[edge];
+    $("selTimes").textContent = `${fmt(r.start)} → ${fmt(r.end)}  (${(r.end - r.start).toFixed(1)} s)`;
+  };
+  const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    dragging = false; sorted(); sel = data.rallies.indexOf(r); render(); queueSave(); };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+}
+
+// overview click/drag = seek; selects the rally under the pointer
+$("tl").addEventListener("pointerdown", (e) => {
+  const rect = $("tl").getBoundingClientRect();
+  const seek = (ev) => { const t = (ev.clientX - rect.left) / rect.width * dur; v.currentTime = Math.max(0, Math.min(dur, t)); };
+  seek(e);
+  const t = v.currentTime, i = data.rallies.findIndex(r => r.start - 2 <= t && t <= r.end + 2);
+  if (i >= 0) { sel = i; render(); }
+  const mv = (ev) => seek(ev), up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
+  window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+});
+
+v.addEventListener("timeupdate", () => {
+  const h = $("tlHead"); if (h) h.style.left = (v.currentTime / dur * 100) + "%";
+  renderZoom();
+  if (stopAt != null && v.currentTime >= stopAt) { v.pause(); stopAt = null; }
+});
+v.addEventListener("play", () => $("play").textContent = "⏸ Pause");
+v.addEventListener("pause", () => $("play").textContent = "▶ Play");
+v.addEventListener("seeked", renderZoom);
+
+// actions
+const nowT = () => Math.round(v.currentTime * 10) / 10;
+function setEdge(edge, t) { const r = cur(); if (!r) return; change(() => {
+  r[edge] = t; if (r.end <= r.start) { if (edge === "start") r.end = r.start + 1; else r.start = Math.max(0, r.end - 1); } }); sel = data.rallies.indexOf(r); render(); }
+function markOk() { const r = cur(); if (!r) return; change(() => r.status = "ok"); sel = data.rallies.indexOf(r); step(1); }
+function markDel() { const r = cur(); if (!r) return; change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); step(1); }
+function addHere() { const t = nowT(); const prev = [...data.rallies].reverse().find(r => r.start <= t);
+  const r = { start: t, end: t + 8, set: prev ? prev.set : 1, winner: null, status: "ok" };
+  change(() => data.rallies.push(r)); select(data.rallies.indexOf(r), false); }
+function splitHere() { const r = cur(), t = nowT(); if (!r || t <= r.start + 0.5 || t >= r.end - 0.5) { alert("Move the playhead inside the selected rally first."); return; }
+  const b = { start: t + 0.1, end: r.end, set: r.set, winner: r.winner, status: "auto" };
+  change(() => { r.end = t; r.winner = null; data.rallies.push(b); }); select(data.rallies.indexOf(r), false); }
+function mergeNext() { const r = cur(); if (!r) return; const i = data.rallies.indexOf(r);
+  const nx = data.rallies.slice(i + 1).find(x => x.status !== "deleted"); if (!nx) return;
+  change(() => { r.end = Math.max(r.end, nx.end); r.winner = nx.winner; data.rallies.splice(data.rallies.indexOf(nx), 1); }); select(data.rallies.indexOf(r), false); }
+function undo() { if (!undoStack.length) return; data = JSON.parse(undoStack.pop()); render(); queueSave(); }
+
+$("play").onclick = () => v.paused ? v.play() : v.pause();
+$("back5").onclick = () => v.currentTime -= 5;
+$("fwd5").onclick = () => v.currentTime += 5;
+$("prev").onclick = () => step(-1);
+$("next").onclick = () => step(1);
+$("speed").onclick = () => { const s = [1, 1.5, 2, 4], i = (s.indexOf(v.playbackRate) + 1) % s.length; v.playbackRate = s[i]; $("speed").textContent = s[i] + "×"; };
+$("reviewMode").onclick = () => { reviewMode = !reviewMode; $("reviewMode").classList.toggle("on", reviewMode); if (reviewMode) playRally(); };
+$("undo").onclick = undo;
+$("playRally").onclick = playRally;
+$("ok").onclick = markOk;
+$("del").onclick = markDel;
+$("startNow").onclick = () => setEdge("start", nowT());
+$("endNow").onclick = () => setEdge("end", nowT());
+document.querySelectorAll("[data-nudge]").forEach(b => b.onclick = () => {
+  const [edge, d] = b.dataset.nudge.split(","); const r = cur(); if (r) setEdge(edge, Math.round((r[edge] + parseFloat(d)) * 10) / 10); });
+document.querySelectorAll("[data-win]").forEach(b => b.onclick = () => { const r = cur(); if (r) change(() => r.winner = b.dataset.win || null); });
+$("setDown").onclick = () => { const r = cur(); if (r && r.set > 1) change(() => r.set -= 1); };
+$("setUp").onclick = () => { const r = cur(); if (r && r.set < 5) change(() => r.set += 1); };
+$("split").onclick = splitHere;
+$("merge").onclick = mergeNext;
+$("add").onclick = addHere;
+$("gameStart").onclick = () => change(() => data.game_start = nowT());
+$("gameEnd").onclick = () => change(() => data.game_end = nowT());
+$("fAll").onclick = () => { filter = "all"; $("fAll").classList.add("on"); $("fTodo").classList.remove("on"); render(); };
+$("fTodo").onclick = () => { filter = "todo"; $("fTodo").classList.add("on"); $("fAll").classList.remove("on"); render(); };
+
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); return; }
+  const k = e.key;
+  if (k === " ") { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+  else if (k === "ArrowLeft") { e.preventDefault(); v.currentTime -= e.shiftKey ? 0.2 : 2; }
+  else if (k === "ArrowRight") { e.preventDefault(); v.currentTime += e.shiftKey ? 0.2 : 2; }
+  else if (k === "[") setEdge("start", nowT());
+  else if (k === "]") setEdge("end", nowT());
+  else if (k === "Enter") { e.preventDefault(); markOk(); }
+  else if (k === "Delete" || k === "Backspace") { e.preventDefault(); markDel(); }
+  else if (k === "n" || k === "N") step(1);
+  else if (k === "p" || k === "P") step(-1);
+  else if (k === "a" || k === "A") addHere();
+  else if (k === "s" || k === "S") splitHere();
+});
+window.addEventListener("beforeunload", (e) => { if (saveTimer && $("saveState").textContent === "saving…") { save(); } });
+
+load();
+</script>
+{% endif %}
+</body>
+</html>

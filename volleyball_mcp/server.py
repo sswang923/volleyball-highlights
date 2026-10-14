@@ -302,6 +302,32 @@ def open_labeler(game: str) -> dict:
     return {"url": url, "status": "starting (first launch builds clip manifest; may take a minute)"}
 
 
+@mcp.tool()
+def open_review(game: str = "") -> dict:
+    """Start the rally review web app (watch each detected rally, fix start/end, game start/end) and return its URL.
+
+    Saves go to labels/<game>/review_<game>.json and are exported to the event log.
+    """
+    key = _key(game) if game else ""
+    port = int(os.environ.get("VB_REVIEW_PORT", "8770"))
+    url = f"http://localhost:{port}/" + (f"g/{key}" if key else "")
+    state_f = WORK / "review_app.json"
+    if state_f.exists() and _alive(json.load(open(state_f))["pid"]):
+        return {"url": url, "status": "already running"}
+    log = WORK / "review_app.log"
+    with open(log, "w") as fh:
+        p = subprocess.Popen([SYS_PY, "review_app.py", "--host", "127.0.0.1", "--port", str(port)], cwd=REPO,
+                             stdout=fh, stderr=subprocess.STDOUT, env=_env(), start_new_session=True)
+    json.dump({"pid": p.pid, "port": port}, open(state_f, "w"))
+    for _ in range(20):
+        time.sleep(0.5)
+        if "Running on" in log.read_text(errors="replace"):
+            return {"url": url, "status": "started"}
+        if p.poll() is not None:
+            return {"error": "review app exited", "log_tail": log.read_text(errors="replace")[-600:]}
+    return {"url": url, "status": "starting"}
+
+
 def _py_json(args: list, timeout=300) -> dict:
     r = subprocess.run([SYS_PY, "-W", "ignore", *args], cwd=REPO, capture_output=True, text=True,
                        env=_env(), timeout=timeout)

@@ -22,9 +22,10 @@ Do the work through the tools; do not read raw logs, videos, or large JSON files
    every few minutes, not in a tight loop — and tell the user which step it is on.
 5. **Report** — `rally_summary(game)` for the per-set counts. Point out sets whose rally count misses the target and that
    point winners are the weakest part.
-6. **Review** — `open_labeler(game)` returns a localhost URL; the user corrects rallies there
-   (W / O end a rally with home / away scoring; confirmed rallies are marked confirmed).
-   If the event log is empty or only an old draft, `use_auto_events(game)` loads the new detections into it first.
+6. **Review** — `open_review(game)` returns a localhost URL for the rally review app: the user plays each
+   detected rally, fixes start/end (buttons, drag handles or `[` `]`), marks it "looks right" or "not a rally",
+   splits/merges/adds rallies, sets game start/end and point winners. It autosaves and exports the event log.
+   (`open_labeler(game)` is the older live-tagging tool — use it for tagging a game from scratch.)
 7. **Measure** — `evaluate_game(game)` compares detections with the user's confirmed rallies
    (recall, precision, start/end error, point-winner accuracy) and with scoreboard checkpoints when present.
 
