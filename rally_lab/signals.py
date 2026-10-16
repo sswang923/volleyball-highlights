@@ -126,14 +126,14 @@ def segment(score, bins, hi=0.5, lo=None, min_len=2.0, merge_gap=2.0):
     return [s for s in merged if s[1] - s[0] >= min_len]
 
 
-def segment_to_count(score, bins, target, lo_t=0.05, hi_t=0.95, **kw):
+def segment_to_count(score, bins, target, lo_t=0.05, hi_t=0.95, return_threshold=False, **kw):
     """Threshold that yields `target` segments (count constraint from the set score)."""
-    best = None
+    best, best_hi = None, None
     for hi in np.linspace(lo_t, hi_t, 91):
         segs = segment(score, bins, hi=hi, **kw)
         if best is None or abs(len(segs) - target) < abs(len(best) - target):
-            best = segs
-    return best
+            best, best_hi = segs, float(hi)
+    return (best, best_hi) if return_threshold else best
 
 
 def serve_side_raw(ball, start):

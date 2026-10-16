@@ -250,6 +250,17 @@ def evaluate_game(game: str) -> dict:
 
 
 @mcp.tool()
+def diagnose_misses(game: str) -> dict:
+    """Why the detector missed rallies the user confirmed in the review app.
+
+    For each confirmed rally with no matching detection, names the stage that lost it: outside the detected sets,
+    signal under the cut-off (and which signal was weak: ball not seen, live/dead said dead, players still),
+    too short, or merged with a neighbour. Also gives median start/end offsets of matched rallies.
+    """
+    return _py_json(["rally_lab/pipeline.py", "diagnose", "--key", _key(game)])
+
+
+@mcp.tool()
 def use_auto_events(game: str, force: bool = False) -> dict:
     """Copy the auto-detected rallies into the labeler's event log (backs up the old one).
 

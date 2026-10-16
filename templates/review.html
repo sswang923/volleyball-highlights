@@ -81,6 +81,13 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
   <div class="panel">
     <div class="timeline" id="tl"></div>
     <div class="zoom" id="zoom"></div>
+    <canvas id="sig" height="70" style="width:100%;height:70px;display:block;margin-top:4px"></canvas>
+    <div class="legend" id="sigLegend">
+      <span><span class="dot" style="background:var(--ink)"></span>rally score</span>
+      <span><span class="dot" style="background:var(--sel)"></span>ball seen</span>
+      <span><span class="dot" style="background:var(--ok)"></span>live/dead</span>
+      <span>dashed: start / stop cut-off. A missed rally whose black line stays under the upper dash shows which signal was weak.</span>
+    </div>
     <div class="legend">
       <span><span class="dot" style="background:var(--auto)"></span>to check</span>
       <span><span class="dot" style="background:var(--ok)"></span>looks right</span>
@@ -269,6 +276,40 @@ function renderZoom() {
     z.appendChild(hd);
   }
   const h = document.createElement("div"); h.className = "head"; h.style.left = "50%"; z.appendChild(h);
+  renderSignals();
+}
+
+let sigCache = null, sigBusy = false;
+async function renderSignals() {
+  const c = v.currentTime || 0, lo = c - ZOOM_HALF, hi = c + ZOOM_HALF;
+  if (!sigCache || lo < sigCache.t0 || hi > sigCache.t1) {
+    if (sigBusy) return; sigBusy = true;
+    try {
+      const r = await fetch(`/api/${GAME}/signals?t0=${lo - 60}&t1=${hi + 60}`);
+      sigCache = { ...(await r.json()), t0: lo - 60, t1: hi + 60 };
+    } finally { sigBusy = false; }
+  }
+  const cv = $("sig"), ctx = cv.getContext("2d");
+  const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = 70 * devicePixelRatio;
+  ctx.clearRect(0, 0, W, H);
+  const css = getComputedStyle(document.documentElement);
+  if (!sigCache.available) { $("sigLegend").textContent = "No detector signals for this game yet (re-run detect)."; return; }
+  const X = (t) => (t - lo) / (2 * ZOOM_HALF) * W, Y = (p) => H - 4 - p * (H - 8);
+  const line = (key, color, width, dash) => {
+    const ys = sigCache[key]; if (!ys) return;
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio; ctx.setLineDash(dash || []);
+    sigCache.t.forEach((t, i) => { if (t < lo - 1 || t > hi + 1) return; const x = X(t), y = Y(Math.min(1, ys[i]));
+      i && sigCache.t[i - 1] >= lo - 1 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  };
+  for (const [p, d] of [[sigCache.hi, [6, 4]], [sigCache.lo, [2, 4]]]) {
+    ctx.beginPath(); ctx.setLineDash(d); ctx.strokeStyle = css.getPropertyValue("--muted"); ctx.lineWidth = devicePixelRatio;
+    ctx.moveTo(0, Y(p)); ctx.lineTo(W, Y(p)); ctx.stroke();
+  }
+  line("ball_seen", css.getPropertyValue("--sel"), 1);
+  line("p_live", css.getPropertyValue("--ok"), 1);
+  line("fused", css.getPropertyValue("--ink"), 2);
+  ctx.setLineDash([]); ctx.strokeStyle = css.getPropertyValue("--head"); ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
 }
 
 function dragHandle(e, edge, lo, span) {

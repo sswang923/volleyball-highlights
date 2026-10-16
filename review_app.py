@@ -185,6 +185,31 @@ def api_rallies(key):
                     "reviewed": sum(r["status"] == "ok" for r in clean)})
 
 
+@app.route("/api/<key>/signals")
+def api_signals(key):
+    """Detector signals for a time window (from work/<key>/signals.npz, written by pipeline detect)."""
+    check_key(key)
+    p = WORK / key / "signals.npz"
+    if not p.exists():
+        return jsonify({"available": False})
+    import numpy as np
+    s = np.load(p)
+    t0, t1 = float(request.args.get("t0", 0)), float(request.args.get("t1", 60))
+    m = (s["bins"] >= t0) & (s["bins"] <= t1)
+    r = lambda a, n: [round(float(x), n) for x in a]
+    out = {"available": True, "t": r(s["bins"][m], 2)}
+    for k in ("fused", "ball_seen", "ball_act", "p_live"):
+        if k in s.files:
+            out[k] = r(s[k][m], 3)
+    mid = (t0 + t1) / 2
+    thr = 0.5
+    for (a, b), h in zip(s["spans"].tolist(), s["thresholds"].tolist()):
+        if a - 5 <= mid <= b + 5:
+            thr = h
+    out["hi"], out["lo"] = round(thr, 3), round(0.6 * thr, 3)
+    return jsonify(out)
+
+
 @app.route("/video/<key>")
 def video(key):
     check_key(key)

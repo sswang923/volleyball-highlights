@@ -206,6 +206,18 @@ def parse_set_scores(s):
     return out
 
 
+SEG = {"hi": 0.5, "min_len": 2.5, "merge_gap": 2.5}   # lo threshold = 0.6 * hi (signals.segment)
+
+
+def save_signals(g, ball, bins, score, spans, thresholds):
+    """Everything the cut-into-rallies step saw, for the review app's signal strip and `diagnose`."""
+    f = features(g, ball, bins)
+    np.savez_compressed(g.dir / "signals.npz", bins=bins, fused=score,
+                        spans=np.array(spans, np.float32).reshape(-1, 2),
+                        thresholds=np.array(thresholds, np.float32),
+                        **{k: v.astype(np.float32) for k, v in f.items()})
+
+
 def cmd_detect(args):
     g = Game(args.key)
     t0 = time.time()
@@ -221,15 +233,19 @@ def cmd_detect(args):
     spans = sg.set_spans_from_rallies(tracker_spans(g))
     set_scores = parse_set_scores(args.set_scores)
 
-    segs = []
+    segs, thresholds = [], []
     for i, (a, b) in enumerate(spans):
         m = (bins >= a - 5) & (bins <= b + 5)
         if i < len(set_scores):
-            s = sg.segment_to_count(score[m], bins[m], sum(set_scores[i]), min_len=2.5, merge_gap=2.5)
+            s, hi = sg.segment_to_count(score[m], bins[m], sum(set_scores[i]), min_len=SEG["min_len"],
+                                        merge_gap=SEG["merge_gap"], return_threshold=True)
         else:
-            s = sg.segment(score[m], bins[m], hi=0.5, min_len=2.5, merge_gap=2.5)
+            hi = SEG["hi"]
+            s = sg.segment(score[m], bins[m], hi=hi, min_len=SEG["min_len"], merge_gap=SEG["merge_gap"])
+        thresholds.append(hi)
         segs += [[x - 0.5, y + 1.0] for x, y in s]
     rallies = sg.score_rallies(segs, spans, ball)
+    save_signals(g, ball, bins, score, spans, thresholds)
 
     events = write_events(g, rallies, spans, set_scores, method)
     summary = {
@@ -350,6 +366,81 @@ def cmd_evaluate(args):
     print(json.dumps(res))
 
 
+def explain_miss(sig, a, b):
+    """Which stage lost a rally the user says happened at [a, b]."""
+    bins, fused = sig["bins"], sig["fused"]
+    m = (bins >= a) & (bins <= b)
+    if not m.any():
+        return "outside the analysed video", {}
+    spans, thr = sig["spans"], sig["thresholds"]
+    k = next((i for i, (sa, sb) in enumerate(spans) if sa - 5 <= a <= sb + 5), None)
+    hi = float(thr[k]) if k is not None and k < len(thr) else SEG["hi"]
+    d = {"peak": round(float(fused[m].max()), 2), "needed": round(hi, 2)}
+    for name in ("ball_seen", "ball_act", "p_live", "p_speed"):
+        if name in sig.files:
+            d[name] = round(float(sig[name][m].mean()), 2)
+    if k is None:
+        return "outside the detected sets: treated as warm-up / set break", d
+    if d["peak"] < hi:
+        why = "signal never reached the cut-off"
+        if d.get("ball_seen", 1) < 0.3:
+            why += ": ball tracker barely saw the ball"
+        elif d.get("p_live", 1) < 0.15:
+            why += ": live/dead classifier thought play was dead"
+        elif d.get("p_speed", 9) < 0.6:
+            why += ": players hardly moving"
+        if hi > SEG["hi"] + 0.05:
+            why += f" (set-score constraint had raised the cut-off to {hi:.2f})"
+        return why, d
+    above = float((fused[m] >= hi).sum()) * sg.BIN_S
+    if above < SEG["min_len"]:
+        return f"detected for only {above:.1f} s, under the {SEG['min_len']} s minimum: dropped", d
+    return "detected, but joined to a neighbouring rally (gap too short or signal never dropped)", d
+
+
+def cmd_diagnose(args):
+    g = Game(args.key)
+    rv, auto = g.labels / f"review_{g.key}.json", g.labels / f"auto_events_{g.key}.json"
+    sigf = g.dir / "signals.npz"
+    if not (rv.exists() and auto.exists() and sigf.exists()):
+        print(json.dumps({"error": "needs a saved review (review app), auto detections and signals.npz (re-run detect)"}))
+        return
+    review = json.load(open(rv))
+    gold = [r for r in review["rallies"] if r["status"] == "ok"]
+    removed = [r for r in review["rallies"] if r["status"] == "deleted"]
+    pred = load_rallies(auto)
+    if not gold:
+        print(json.dumps({"error": "no rallies marked 'looks right' yet"}))
+        return
+    lo, hi = min(r["start"] for r in gold), max(r["end"] for r in gold)
+    pred = [p for p in pred if lo - 5 <= p["start"] <= hi + 5]
+    pairs = match(gold, pred)
+    matched_gold = {i for i, _ in pairs}
+    sig = np.load(sigf)
+    misses, reasons = [], {}
+    for i, r in enumerate(gold):
+        if i in matched_gold:
+            continue
+        overl = any(min(r["end"], p["end"]) > max(r["start"], p["start"]) for p in pred)
+        if overl:
+            why, d = "merged with a neighbouring rally into one detection", {}
+        else:
+            why, d = explain_miss(sig, r["start"], r["end"])
+        key = why.split(" (")[0]
+        reasons[key] = reasons.get(key, 0) + 1
+        misses.append({"at": bg.fmt(r["start"]), "length_s": round(r["end"] - r["start"], 1), "why": why, **d})
+    starts = [p_["start"] - gold[i]["start"] for i, j in pairs for p_ in [pred[j]]]
+    ends = [p_["end"] - gold[i]["end"] for i, j in pairs for p_ in [pred[j]]]
+    print(json.dumps({
+        "game": g.key, "checked_rallies": len(gold), "found": len(pairs), "missed": len(misses),
+        "extra_removed_by_you": len(removed),
+        "miss_reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
+        "boundary_offsets_s": {"start_median": round(float(np.median(starts)), 2) if starts else None,
+                               "end_median": round(float(np.median(ends)), 2) if ends else None,
+                               "note": "negative = detector starts/ends early"},
+        "misses": misses[:40]}))
+
+
 def cmd_status(args):
     g = Game(args.key)
     st = {"game": g.key, "stitched": g.stitched.exists(), "proxy": g.proxy.exists(),
@@ -372,11 +463,12 @@ def main():
     d.add_argument("--set-scores", default="", help="final score per set, home-away, e.g. 19-25,25-18,15-10")
     f = sub.add_parser("fit-fusion")
     f.add_argument("--keys", nargs="+", required=True)
-    for name in ("evaluate", "status"):
+    for name in ("evaluate", "status", "diagnose"):
         p = sub.add_parser(name)
         p.add_argument("--key", required=True)
     args = ap.parse_args()
-    {"detect": cmd_detect, "fit-fusion": cmd_fit_fusion, "evaluate": cmd_evaluate, "status": cmd_status}[args.cmd](args)
+    {"detect": cmd_detect, "fit-fusion": cmd_fit_fusion, "evaluate": cmd_evaluate, "status": cmd_status,
+     "diagnose": cmd_diagnose}[args.cmd](args)
 
 
 if __name__ == "__main__":
