@@ -10,7 +10,8 @@ stitched video) and loads, in order of preference:
     labels/<key>/review_<key>.json        your saved review
     labels/<key>/auto_events_<key>.json   detector output
     labels/<key>/event_log_<key>.json     older drafts
-Every save writes review_<key>.json and exports event_log_<key>.json (the format
+Every save writes review_<key>.json and rallies_<key>.txt (editable text), and
+exports event_log_<key>.json (the format
 label_clips.py, evaluation and YouTube chapters read). The first export backs
 up any existing event log.
 """
@@ -180,9 +181,19 @@ def api_rallies(key):
     tmp = rv.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(out, indent=2))
     tmp.replace(rv)
+    if isinstance(d.get("text"), str):          # editable text twin of the review
+        (LABELS / key / f"rallies_{key}.txt").write_text(d["text"], encoding="utf-8")
     return jsonify({"ok": True, "saved_at": out["saved_at"],
                     "rallies": sum(r["status"] != "deleted" for r in clean),
                     "reviewed": sum(r["status"] == "ok" for r in clean)})
+
+
+@app.route("/api/<key>/text")
+def api_text(key):
+    """The rally list as text (labels/<key>/rallies_<key>.txt), for editing outside the app."""
+    check_key(key)
+    p = LABELS / key / f"rallies_{key}.txt"
+    return jsonify({"text": p.read_text(encoding="utf-8") if p.exists() else None})
 
 
 @app.route("/api/<key>/signals")

@@ -8,12 +8,12 @@
 :root {
   --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #dddad3;
   --auto: #e0a43a; --ok: #2f9e5b; --del: #b8b4ab; --sel: #2563eb; --game: #8b5cf6; --head: #e11d48;
-  --btn: #efede8; --btn-ink: #1d1d1f;
+  --btn: #efede8; --btn-ink: #1d1d1f; --err: #c2410c;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #141416; --panel: #1e1e21; --ink: #ececee; --muted: #9a9aa2; --line: #34343a;
           --auto: #d6a03f; --ok: #3fb672; --del: #55555c; --sel: #5b8cff; --game: #a78bfa; --head: #fb7185;
-          --btn: #2a2a2f; --btn-ink: #ececee; }
+          --btn: #2a2a2f; --btn-ink: #ececee; --err: #fb923c; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -22,24 +22,31 @@ a { color: var(--sel); }
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 header h1 { font-size: 18px; margin: 0; }
 #saveState { margin-left: auto; font-size: 13px; color: var(--muted); }
-video { width: 100%; max-height: 62vh; background: #000; border-radius: 8px; display: block; }
+video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; display: block; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
+.bar-label { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; margin: 2px 0 3px; }
+.bar-label .grow { flex: 1; }
 .timeline { position: relative; height: 34px; background: var(--btn); border-radius: 6px; cursor: pointer; overflow: hidden; touch-action: none; }
-.zoom { position: relative; height: 54px; background: var(--btn); border-radius: 6px; overflow: hidden; touch-action: none; margin-top: 8px; }
-.seg { position: absolute; top: 6px; bottom: 6px; border-radius: 3px; background: var(--auto); opacity: .9; }
+.zoom { position: relative; height: 64px; background: var(--btn); border-radius: 6px; overflow: hidden; touch-action: none; cursor: pointer; }
+.zoom.edge { cursor: ew-resize; }
+.window { position: absolute; top: 0; bottom: 0; border: 1px solid var(--sel); background: color-mix(in srgb, var(--sel) 10%, transparent); pointer-events: none; z-index: 1; }
+.seg { position: absolute; top: 6px; bottom: 6px; border-radius: 3px; background: var(--auto); opacity: .9; pointer-events: none; }
+.zoom .seg { bottom: 18px; }
 .seg.ok { background: var(--ok); }
 .seg.deleted { background: repeating-linear-gradient(45deg, var(--del), var(--del) 4px, transparent 4px, transparent 8px); opacity: .7; }
 .seg.sel { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
-.mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--game); z-index: 3; }
+.edge-mark { position: absolute; top: 2px; bottom: 16px; width: 4px; margin-left: -2px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 35%, transparent); z-index: 3; pointer-events: none; }
+.seg.sel ~ .edge-mark.sel, .edge-mark.sel { background: var(--sel); }
+.mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--game); z-index: 3; pointer-events: none; }
 .head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--head); z-index: 4; pointer-events: none; }
-.handle { position: absolute; top: 0; bottom: 0; width: 18px; margin-left: -9px; z-index: 5; cursor: ew-resize; display: flex; justify-content: center; }
-.handle::after { content: ""; width: 4px; height: 100%; background: var(--sel); border-radius: 2px; }
-.tick { position: absolute; bottom: 0; font-size: 10px; color: var(--muted); transform: translateX(-50%); pointer-events: none; }
+.tick { position: absolute; bottom: 1px; font-size: 10px; color: var(--muted); transform: translateX(-50%); pointer-events: none; }
+.drag-tip { position: absolute; top: -2px; transform: translateX(-50%); background: var(--sel); color: #fff; font-size: 11px; padding: 1px 5px; border-radius: 4px; z-index: 6; pointer-events: none; white-space: nowrap; }
 .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
 button { background: var(--btn); color: var(--btn-ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font: inherit; font-size: 14px; cursor: pointer; min-height: 38px; }
+button.small { min-height: 28px; padding: 2px 9px; font-size: 13px; }
 button:hover { border-color: var(--muted); }
 button.primary { background: var(--ok); color: #fff; border-color: transparent; }
-button.danger { color: #c2410c; }
+button.danger { color: var(--err); }
 button.on { outline: 2px solid var(--sel); }
 .sel-title { font-weight: 600; }
 .times { font-variant-numeric: tabular-nums; color: var(--muted); }
@@ -52,9 +59,14 @@ button.on { outline: 2px solid var(--sel); }
 .chip { font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--auto); color: #1d1d1f; }
 .chip.ok { background: var(--ok); color: #fff; }
 .chip.deleted { background: var(--del); }
+.tabs { display: flex; gap: 6px; }
+textarea { width: 100%; min-height: 360px; font: 13px/1.45 ui-monospace, "Cascadia Mono", Consolas, monospace; background: var(--bg); color: var(--ink);
+           border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 8px; }
+#textErrors { color: var(--err); font-size: 13px; white-space: pre-wrap; margin-top: 6px; }
 .games a { display: block; padding: 10px 0; border-bottom: 1px solid var(--line); text-decoration: none; }
 .help { font-size: 12px; color: var(--muted); margin-top: 8px; }
 kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+.hidden { display: none; }
 @media (max-width: 640px) { .wrap { padding: 8px 16px 40px; } button { padding: 8px 9px; } .hide-sm { display: none; } }
 </style>
 </head>
@@ -79,21 +91,23 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
   <video id="v" src="/video/{{ game }}" preload="metadata" controls playsinline></video>
 
   <div class="panel">
+    <div class="bar-label"><span>Whole game — click or drag to move; blue box = zoomed area</span></div>
     <div class="timeline" id="tl"></div>
-    <div class="zoom" id="zoom"></div>
-    <canvas id="sig" height="70" style="width:100%;height:70px;display:block;margin-top:4px"></canvas>
-    <div class="legend" id="sigLegend">
-      <span><span class="dot" style="background:var(--ink)"></span>rally score</span>
-      <span><span class="dot" style="background:var(--sel)"></span>ball seen</span>
-      <span><span class="dot" style="background:var(--ok)"></span>live/dead</span>
-      <span>dashed: start / stop cut-off. A missed rally whose black line stays under the upper dash shows which signal was weak.</span>
+    <div class="bar-label" style="margin-top:8px">
+      <span>Zoomed — click/drag to move · grab a rally's edge to change its start or end</span>
+      <span class="grow"></span>
+      <button class="small" id="zoomOut" title="Zoom out (or mouse wheel)">−</button>
+      <span id="zoomLabel" class="times">80 s</span>
+      <button class="small" id="zoomIn" title="Zoom in (or mouse wheel)">＋</button>
     </div>
-    <div class="legend">
+    <div class="zoom" id="zoom"></div>
+    <canvas id="sig" height="60" style="width:100%;height:60px;display:block;margin-top:4px"></canvas>
+    <div class="legend" id="sigLegend">
       <span><span class="dot" style="background:var(--auto)"></span>to check</span>
       <span><span class="dot" style="background:var(--ok)"></span>looks right</span>
       <span><span class="dot" style="background:var(--del)"></span>not a rally</span>
       <span><span class="dot" style="background:var(--game)"></span>game start/end</span>
-      <span>Bottom strip: ±40 s around the playhead — drag the blue handles to move start/end.</span>
+      <span>Signals: <b style="color:var(--ink)">—</b> rally score, <b style="color:var(--sel)">—</b> ball seen, <b style="color:var(--ok)">—</b> live/dead, dashed = cut-offs</span>
     </div>
     <div class="row">
       <button id="prev">⏮ Prev</button>
@@ -143,14 +157,26 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <span class="times" id="gameTimes"></span>
     </div>
     <div class="row">
-      <button id="fAll" class="on">All</button><button id="fTodo">To check</button>
+      <div class="tabs"><button id="tabList" class="on">List</button><button id="tabText">Edit as text</button></div>
+      <span class="grow"></span>
+      <span id="listFilters"><button id="fAll" class="on">All</button> <button id="fTodo">To check</button></span>
       <span class="times" id="counts"></span>
     </div>
-    <div id="list"></div>
+    <div id="listView"><div id="list"></div></div>
+    <div id="textView" class="hidden">
+      <div class="row">
+        <button id="textApply" class="primary">Apply text</button>
+        <button id="textReset">Discard edits</button>
+        <button id="textLoadFile" title="Re-read labels/{{ game }}/rallies_{{ game }}.txt from disk">Load file from disk</button>
+        <span class="times">Also saved as labels/{{ game }}/rallies_{{ game }}.txt</span>
+      </div>
+      <textarea id="text" spellcheck="false"></textarea>
+      <div id="textErrors"></div>
+    </div>
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
       <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
-      <kbd>S</kbd> split · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+      <kbd>S</kbd> split · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
 {% endif %}
@@ -162,15 +188,22 @@ const GAME = {{ game|tojson }};
 const v = document.getElementById("v");
 const $ = (id) => document.getElementById(id);
 let data = { rallies: [], game_start: null, game_end: null }, dur = 1, sel = -1;
-let undoStack = [], dragging = false, saveTimer = null, filter = "all", reviewMode = false, stopAt = null;
-const ZOOM_HALF = 40;
+let undoStack = [], saveTimer = null, filter = "all", reviewMode = false, stopAt = null;
+let dragging = null;                       // {kind: "scrub"|"edge", ...} while a pointer drag is active
+const ZOOM_LEVELS = [10, 20, 40, 80, 160, 300, 600, 1200];
+let zoomSpan = 80, zoomLo = 0;             // zoomed window [zoomLo, zoomLo + zoomSpan]
+const EDGE_PX = 10;
 
 const fmt = (t) => { if (t == null) return "—"; t = Math.max(0, t);
   const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = (t % 60).toFixed(1).padStart(4, "0");
-  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + s; };
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`; };
+const parseT = (s) => {                    // "1:02:03.5" | "2:03.5" | "123.5" -> seconds (NaN if bad)
+  if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(s)) return NaN;
+  return s.split(":").reduce((acc, p) => acc * 60 + parseFloat(p), 0);
+};
 
 function sorted() { data.rallies.sort((a, b) => a.start - b.start); }
-function numbering() {             // rally number within its set, ignoring deleted
+function numbering() {
   const n = {}, out = new Map();
   for (const r of data.rallies) if (r.status !== "deleted") { n[r.set] = (n[r.set] || 0) + 1; out.set(r, n[r.set]); }
   return out;
@@ -178,6 +211,7 @@ function numbering() {             // rally number within its set, ignoring dele
 function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
 function change(fn) { snapshot(); fn(); sorted(); render(); queueSave(); }
 
+// ── load / save ─────────────────────────────────────────────────────────────
 async function load() {
   const r = await fetch(`/api/${GAME}/rallies`); const d = await r.json();
   data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end };
@@ -185,35 +219,130 @@ async function load() {
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
   const first = data.rallies.findIndex(r => r.status === "auto");
   select(first >= 0 ? first : 0, true);
+  $("text").value = toText();
 }
 function queueSave() { $("saveState").textContent = "saving…"; clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); }
 async function save() {
   try {
-    const r = await fetch(`/api/${GAME}/rallies`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    const r = await fetch(`/api/${GAME}/rallies`, { method: "PUT", headers: { "Content-Type": "application/json" },
+                                                     body: JSON.stringify({ ...data, text: toText() }) });
     const d = await r.json();
     $("saveState").textContent = d.ok ? `saved ${d.saved_at.slice(11)}` : "save failed";
+    if (!$("textView").classList.contains("hidden") && !textDirty) $("text").value = toText();
   } catch (e) { $("saveState").textContent = "save failed — retrying"; setTimeout(save, 3000); }
 }
 
+// ── text format ─────────────────────────────────────────────────────────────
+function toText() {
+  const nums = numbering(), L = [
+    `# ${GAME} — rally list. Edit, then press "Apply text".`,
+    "# One rally per line:  start - end   [ok | check | removed]   [tyrants | opp]",
+    "# Times are m:ss.s or h:mm:ss.s. 'set N' starts a set. Lines starting with # are ignored.",
+    "",
+  ];
+  L.push(`game_start ${data.game_start == null ? "-" : fmt(data.game_start)}`);
+  L.push(`game_end   ${data.game_end == null ? "-" : fmt(data.game_end)}`);
+  let cur = null;
+  for (const r of data.rallies) {
+    if (r.set !== cur) { L.push("", `set ${r.set}`); cur = r.set; }
+    const st = r.status === "ok" ? "ok" : r.status === "deleted" ? "removed" : "check";
+    const win = r.winner === "home" ? "tyrants" : r.winner === "away" ? "opp" : "";
+    const n = nums.get(r) ? `# R${nums.get(r)}` : "";
+    L.push(`${fmt(r.start).padStart(9)} - ${fmt(r.end).padEnd(9)}  ${st.padEnd(7)} ${win.padEnd(7)} ${n}`.trimEnd());
+  }
+  return L.join("\n") + "\n";
+}
+function fromText(txt) {
+  const out = { rallies: [], game_start: null, game_end: null }, errs = [];
+  let set = 1;
+  txt.split("\n").forEach((raw, i) => {
+    const line = raw.replace(/#.*/, "").trim(); if (!line) return;
+    const ln = `line ${i + 1}: `;
+    let m;
+    if ((m = line.match(/^game_(start|end)\s+(\S+)$/i))) {
+      const t = m[2] === "-" ? null : parseT(m[2]);
+      if (Number.isNaN(t)) errs.push(ln + `bad time "${m[2]}"`); else out["game_" + m[1].toLowerCase()] = t;
+    } else if ((m = line.match(/^set\s+(\d+)$/i))) { set = parseInt(m[1]);
+    } else if ((m = line.match(/^(\S+)\s*-\s*(\S+)(.*)$/))) {
+      const s = parseT(m[1]), e = parseT(m[2]);
+      if (Number.isNaN(s) || Number.isNaN(e)) { errs.push(ln + `bad time in "${line}"`); return; }
+      if (e <= s) { errs.push(ln + "end must be after start"); return; }
+      const r = { start: s, end: e, set, status: "auto", winner: null };
+      for (const w of m[3].trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+        if (w === "ok") r.status = "ok"; else if (w === "check") r.status = "auto";
+        else if (w === "removed") r.status = "deleted";
+        else if (w === "tyrants" || w === "home") r.winner = "home"; else if (w === "opp" || w === "away") r.winner = "away";
+        else errs.push(ln + `unknown word "${w}"`);
+      }
+      if (e > dur + 1) errs.push(ln + `end ${fmt(e)} is past the end of the video (${fmt(dur)})`);
+      out.rallies.push(r);
+    } else errs.push(ln + `can't read "${line}"`);
+  });
+  return { out, errs };
+}
+let textDirty = false;
+$("text").addEventListener("input", () => textDirty = true);
+$("textApply").onclick = () => {
+  const { out, errs } = fromText($("text").value);
+  $("textErrors").textContent = errs.join("\n");
+  if (errs.length) return;
+  change(() => { data.rallies = out.rallies; data.game_start = out.game_start; data.game_end = out.game_end; });
+  textDirty = false; $("text").value = toText();
+  $("textErrors").textContent = `Applied: ${out.rallies.length} rallies.`;
+};
+$("textReset").onclick = () => { $("text").value = toText(); textDirty = false; $("textErrors").textContent = ""; };
+$("textLoadFile").onclick = async () => {
+  const r = await fetch(`/api/${GAME}/text`); const d = await r.json();
+  if (!d.text) { $("textErrors").textContent = "No text file on disk yet — it is written on the first save."; return; }
+  $("text").value = d.text; textDirty = true;
+  $("textErrors").textContent = "Loaded from disk — press Apply text to use it.";
+};
+$("tabList").onclick = () => { $("tabList").classList.add("on"); $("tabText").classList.remove("on");
+  $("listView").classList.remove("hidden"); $("textView").classList.add("hidden"); $("listFilters").classList.remove("hidden"); };
+$("tabText").onclick = () => { $("tabText").classList.add("on"); $("tabList").classList.remove("on");
+  $("textView").classList.remove("hidden"); $("listView").classList.add("hidden"); $("listFilters").classList.add("hidden");
+  if (!textDirty) $("text").value = toText(); };
+
+// ── selection / playback ───────────────────────────────────────────────────
 function select(i, seek) {
   if (!data.rallies.length) { sel = -1; render(); return; }
   sel = Math.max(0, Math.min(i, data.rallies.length - 1));
-  if (seek) v.currentTime = Math.max(0, data.rallies[sel].start - 1.5);
+  if (seek) { v.currentTime = Math.max(0, data.rallies[sel].start - 1.5); centerZoom(data.rallies[sel].start + 3); }
   render();
   const el = document.querySelector(`.item[data-i="${sel}"]`); if (el) el.scrollIntoView({ block: "nearest" });
 }
 const cur = () => data.rallies[sel];
-function step(dir) {               // next/prev, skipping deleted
+function step(dir) {
   let i = sel + dir;
   while (i >= 0 && i < data.rallies.length && data.rallies[i].status === "deleted") i += dir;
   if (i >= 0 && i < data.rallies.length) { select(i, true); if (reviewMode) playRally(); }
 }
 function playRally() { const r = cur(); if (!r) return; v.currentTime = Math.max(0, r.start - 1); stopAt = r.end + 1; v.play(); }
 
-function render() {
-  const nums = numbering();
-  // overview timeline
+// ── zoom window ────────────────────────────────────────────────────────────
+function centerZoom(t) { zoomLo = Math.max(0, Math.min(dur - zoomSpan, t - zoomSpan / 2)); }
+function setZoom(span, anchorT) {
+  const a = anchorT == null ? zoomLo + zoomSpan / 2 : anchorT, frac = (a - zoomLo) / zoomSpan;
+  zoomSpan = span; zoomLo = Math.max(0, Math.min(dur - zoomSpan, a - frac * zoomSpan));
+  $("zoomLabel").textContent = span >= 120 ? `${span / 60} min` : `${span} s`; render();
+}
+function zoomBy(dir, anchorT) {
+  const i = ZOOM_LEVELS.indexOf(zoomSpan), j = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i + dir));
+  if (j !== i) setZoom(ZOOM_LEVELS[j], anchorT);
+}
+function followPlayhead() {                // keep the playhead inside the zoomed window while playing
+  if (dragging) return;
+  const t = v.currentTime;
+  if (t < zoomLo || t > zoomLo + zoomSpan * 0.9) { zoomLo = Math.max(0, Math.min(dur - zoomSpan, t - zoomSpan * 0.15)); renderZoom(); }
+}
+
+// ── rendering ──────────────────────────────────────────────────────────────
+function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); }
+
+function renderOverview() {
   const tl = $("tl"); tl.innerHTML = "";
+  const w = document.createElement("div"); w.className = "window";
+  w.style.left = (zoomLo / dur * 100) + "%"; w.style.width = Math.max(0.3, zoomSpan / dur * 100) + "%"; tl.appendChild(w);
   data.rallies.forEach((r, i) => {
     const d = document.createElement("div");
     d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
@@ -222,10 +351,39 @@ function render() {
   });
   for (const t of [data.game_start, data.game_end]) if (t != null) {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = (t / dur * 100) + "%"; tl.appendChild(m); }
-  const h = document.createElement("div"); h.className = "head"; h.id = "tlHead"; tl.appendChild(h);
-  renderZoom();
-  // selection panel
-  const r = cur();
+  const h = document.createElement("div"); h.className = "head"; h.id = "tlHead"; h.style.left = (v.currentTime / dur * 100) + "%"; tl.appendChild(h);
+}
+
+function renderZoom() {
+  const z = $("zoom"); z.innerHTML = "";
+  const lo = zoomLo, span = zoomSpan, X = (t) => ((t - lo) / span * 100) + "%";
+  const tickStep = [1, 2, 5, 10, 20, 30, 60, 120, 300].find(s => span / s <= 10) || 600;
+  for (let t = Math.ceil(lo / tickStep) * tickStep; t < lo + span; t += tickStep) {
+    const k = document.createElement("div"); k.className = "tick"; k.style.left = X(t); k.textContent = fmt(t).replace(/\.\d$/, ""); z.appendChild(k);
+  }
+  for (const t of [data.game_start, data.game_end]) if (t != null && t >= lo && t <= lo + span) {
+    const m = document.createElement("div"); m.className = "mark"; m.style.left = X(t); z.appendChild(m); }
+  data.rallies.forEach((r, i) => {
+    if (r.end < lo || r.start > lo + span) return;
+    const d = document.createElement("div");
+    d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
+    d.style.left = X(r.start); d.style.width = ((r.end - r.start) / span * 100) + "%";
+    z.appendChild(d);
+    if (r.status !== "deleted") for (const edge of ["start", "end"]) {
+      if (r[edge] < lo || r[edge] > lo + span) continue;
+      const e = document.createElement("div"); e.className = "edge-mark" + (i === sel ? " sel" : ""); e.style.left = X(r[edge]); z.appendChild(e);
+    }
+  });
+  if (dragging && dragging.kind === "edge") {
+    const r = dragging.rally, tip = document.createElement("div"); tip.className = "drag-tip";
+    tip.style.left = X(r[dragging.edge]); tip.textContent = `${dragging.edge} ${fmt(r[dragging.edge])}`; z.appendChild(tip);
+  }
+  const h = document.createElement("div"); h.className = "head"; h.style.left = X(v.currentTime); z.appendChild(h);
+  renderSignals();
+}
+
+function renderPanel() {
+  const r = cur(), nums = numbering();
   if (r) {
     $("selTitle").textContent = `Set ${r.set} · Rally ${nums.get(r) || "—"}` + (r.status === "ok" ? " ✓" : r.status === "deleted" ? " (not a rally)" : "");
     $("selTimes").textContent = `${fmt(r.start)} → ${fmt(r.end)}  (${(r.end - r.start).toFixed(1)} s)`;
@@ -233,12 +391,13 @@ function render() {
     document.querySelectorAll("[data-win]").forEach(b => b.classList.toggle("on", (r.winner || "") === b.dataset.win));
   }
   $("gameTimes").textContent = `game ${fmt(data.game_start)} → ${fmt(data.game_end)}`;
-  // list
-  const live = data.rallies.filter(x => x.status !== "deleted");
-  const okc = live.filter(x => x.status === "ok").length;
+  const live = data.rallies.filter(x => x.status !== "deleted"), okc = live.filter(x => x.status === "ok").length;
   $("counts").textContent = `${live.length} rallies · ${okc} checked · ${live.length - okc} to check`;
   $("progress").textContent = `${okc}/${live.length} checked`;
-  const list = $("list"); list.innerHTML = "";
+}
+
+function renderList() {
+  const nums = numbering(), list = $("list"); list.innerHTML = "";
   data.rallies.forEach((x, i) => {
     if (filter === "todo" && x.status !== "auto") return;
     const d = document.createElement("div");
@@ -252,54 +411,29 @@ function render() {
   });
 }
 
-function renderZoom() {
-  if (dragging) return;   // the strip would recenter under the pointer mid-drag
-  const z = $("zoom"); z.innerHTML = "";
-  const c = v.currentTime || 0, lo = c - ZOOM_HALF, span = 2 * ZOOM_HALF;
-  const X = (t) => ((t - lo) / span * 100) + "%";
-  for (let t = Math.ceil(lo / 10) * 10; t < lo + span; t += 10) {
-    const k = document.createElement("div"); k.className = "tick"; k.style.left = X(t); k.textContent = fmt(t).replace(/\.\d$/, ""); z.appendChild(k);
-  }
-  data.rallies.forEach((r, i) => {
-    if (r.end < lo || r.start > lo + span) return;
-    const d = document.createElement("div");
-    d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
-    d.style.left = X(r.start); d.style.width = ((r.end - r.start) / span * 100) + "%"; d.style.bottom = "16px";
-    d.onclick = (e) => { e.stopPropagation(); select(i, false); };
-    z.appendChild(d);
-  });
-  const r = cur();
-  if (r && r.status !== "deleted") for (const edge of ["start", "end"]) {
-    if (r[edge] < lo || r[edge] > lo + span) continue;
-    const hd = document.createElement("div"); hd.className = "handle"; hd.style.left = X(r[edge]);
-    hd.onpointerdown = (e) => dragHandle(e, edge, lo, span);
-    z.appendChild(hd);
-  }
-  const h = document.createElement("div"); h.className = "head"; h.style.left = "50%"; z.appendChild(h);
-  renderSignals();
-}
-
 let sigCache = null, sigBusy = false;
 async function renderSignals() {
-  const c = v.currentTime || 0, lo = c - ZOOM_HALF, hi = c + ZOOM_HALF;
+  const lo = zoomLo, hi = zoomLo + zoomSpan;
   if (!sigCache || lo < sigCache.t0 || hi > sigCache.t1) {
     if (sigBusy) return; sigBusy = true;
     try {
-      const r = await fetch(`/api/${GAME}/signals?t0=${lo - 60}&t1=${hi + 60}`);
-      sigCache = { ...(await r.json()), t0: lo - 60, t1: hi + 60 };
+      const pad = Math.max(60, zoomSpan);
+      const r = await fetch(`/api/${GAME}/signals?t0=${lo - pad}&t1=${hi + pad}`);
+      sigCache = { ...(await r.json()), t0: lo - pad, t1: hi + pad };
     } finally { sigBusy = false; }
   }
   const cv = $("sig"), ctx = cv.getContext("2d");
-  const W = cv.width = cv.clientWidth * devicePixelRatio, H = cv.height = 70 * devicePixelRatio;
+  const W = cv.width = Math.max(1, cv.clientWidth * devicePixelRatio), H = cv.height = 60 * devicePixelRatio;
   ctx.clearRect(0, 0, W, H);
+  if (!sigCache.available) return;
   const css = getComputedStyle(document.documentElement);
-  if (!sigCache.available) { $("sigLegend").textContent = "No detector signals for this game yet (re-run detect)."; return; }
-  const X = (t) => (t - lo) / (2 * ZOOM_HALF) * W, Y = (p) => H - 4 - p * (H - 8);
-  const line = (key, color, width, dash) => {
+  const X = (t) => (t - lo) / zoomSpan * W, Y = (p) => H - 3 - p * (H - 6);
+  const line = (key, color, width) => {
     const ys = sigCache[key]; if (!ys) return;
-    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio; ctx.setLineDash(dash || []);
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = width * devicePixelRatio; ctx.setLineDash([]);
+    let started = false;
     sigCache.t.forEach((t, i) => { if (t < lo - 1 || t > hi + 1) return; const x = X(t), y = Y(Math.min(1, ys[i]));
-      i && sigCache.t[i - 1] >= lo - 1 ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+      started ? ctx.lineTo(x, y) : ctx.moveTo(x, y); started = true; });
     ctx.stroke();
   };
   for (const [p, d] of [[sigCache.hi, [6, 4]], [sigCache.lo, [2, 4]]]) {
@@ -309,45 +443,96 @@ async function renderSignals() {
   line("ball_seen", css.getPropertyValue("--sel"), 1);
   line("p_live", css.getPropertyValue("--ok"), 1);
   line("fused", css.getPropertyValue("--ink"), 2);
-  ctx.setLineDash([]); ctx.strokeStyle = css.getPropertyValue("--head"); ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+  ctx.setLineDash([]); ctx.strokeStyle = css.getPropertyValue("--head"); ctx.beginPath();
+  ctx.moveTo(X(v.currentTime), 0); ctx.lineTo(X(v.currentTime), H); ctx.stroke();
 }
 
-function dragHandle(e, edge, lo, span) {
-  e.preventDefault(); e.stopPropagation();
-  const z = $("zoom"), rect = z.getBoundingClientRect(), r = cur();
-  snapshot(); dragging = true;
-  const move = (ev) => {
-    let t = lo + (ev.clientX - rect.left) / rect.width * span;
-    if (edge === "start") t = Math.min(t, r.end - 0.5); else t = Math.max(t, r.start + 0.5);
-    r[edge] = Math.round(t * 10) / 10; v.currentTime = r[edge];
-    $("selTimes").textContent = `${fmt(r.start)} → ${fmt(r.end)}  (${(r.end - r.start).toFixed(1)} s)`;
-  };
-  const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
-    dragging = false; sorted(); sel = data.rallies.indexOf(r); render(); queueSave(); };
-  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
-}
-
-// overview click/drag = seek; selects the rally under the pointer
+// ── pointer interaction ────────────────────────────────────────────────────
+// Whole-game bar: click/drag scrubs; the zoomed window jumps to follow.
 $("tl").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
   const rect = $("tl").getBoundingClientRect();
-  const seek = (ev) => { const t = (ev.clientX - rect.left) / rect.width * dur; v.currentTime = Math.max(0, Math.min(dur, t)); };
+  const tAt = (ev) => Math.max(0, Math.min(dur, (ev.clientX - rect.left) / rect.width * dur));
+  dragging = { kind: "scrub" };
+  const seek = (ev) => { const t = tAt(ev); v.currentTime = t; centerZoom(t); renderOverview(); renderZoom(); };
   seek(e);
-  const t = v.currentTime, i = data.rallies.findIndex(r => r.start - 2 <= t && t <= r.end + 2);
-  if (i >= 0) { sel = i; render(); }
-  const mv = (ev) => seek(ev), up = () => { window.removeEventListener("pointermove", mv); window.removeEventListener("pointerup", up); };
-  window.addEventListener("pointermove", mv); window.addEventListener("pointerup", up);
+  const i = data.rallies.findIndex(r => r.start - 2 <= v.currentTime && v.currentTime <= r.end + 2);
+  if (i >= 0) { sel = i; renderPanel(); renderList(); }
+  const up = () => { dragging = null; window.removeEventListener("pointermove", seek); window.removeEventListener("pointerup", up); render(); };
+  window.addEventListener("pointermove", seek); window.addEventListener("pointerup", up);
 });
 
+// Zoomed bar: grab near a rally edge = move that edge (video frozen on that frame, then
+// jumps back to the start of the edited rally); click inside a rally = select it; anywhere = scrub.
+function zoomTimeAt(ev, rect) { return zoomLo + (ev.clientX - rect.left) / rect.width * zoomSpan; }
+function edgeNear(ev, rect) {
+  const pxPerS = rect.width / zoomSpan; let best = null;
+  data.rallies.forEach((r, i) => { if (r.status === "deleted") return;
+    for (const edge of ["start", "end"]) {
+      const dx = Math.abs((r[edge] - zoomLo) * pxPerS - (ev.clientX - rect.left));
+      if (dx <= EDGE_PX && (!best || dx < best.dx || (dx === best.dx && i === sel))) best = { i, edge, dx };
+    } });
+  return best;
+}
+$("zoom").addEventListener("pointermove", (e) => {
+  if (dragging) return;
+  $("zoom").classList.toggle("edge", !!edgeNear(e, $("zoom").getBoundingClientRect()));
+});
+$("zoom").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const rect = $("zoom").getBoundingClientRect(), hit = edgeNear(e, rect);
+  if (hit) {
+    const r = data.rallies[hit.i]; sel = hit.i;
+    snapshot(); v.pause(); stopAt = null;
+    dragging = { kind: "edge", rally: r, edge: hit.edge };
+    const move = (ev) => {
+      let t = Math.round(zoomTimeAt(ev, rect) * 10) / 10;
+      t = hit.edge === "start" ? Math.max(0, Math.min(t, r.end - 0.5)) : Math.min(dur, Math.max(t, r.start + 0.5));
+      r[hit.edge] = t; v.currentTime = t;            // freeze on the frame under the edge
+      renderZoom(); renderPanel();
+    };
+    move(e);
+    const up = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+      dragging = null; sorted(); sel = data.rallies.indexOf(r);
+      render(); queueSave();
+      playRally();                                    // back to the start of the edited rally
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+    return;
+  }
+  const t0 = zoomTimeAt(e, rect);
+  const i = data.rallies.findIndex(r => r.start <= t0 && t0 <= r.end);
+  if (i >= 0) { sel = i; renderPanel(); renderList(); }
+  dragging = { kind: "scrub" };
+  const seek = (ev) => { v.currentTime = Math.max(0, Math.min(dur, zoomTimeAt(ev, rect))); renderZoom(); renderOverview(); };
+  seek(e);
+  const up = () => { dragging = null; window.removeEventListener("pointermove", seek); window.removeEventListener("pointerup", up); render(); };
+  window.addEventListener("pointermove", seek); window.addEventListener("pointerup", up);
+});
+$("zoom").addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = $("zoom").getBoundingClientRect();
+  if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {          // pan
+    const d = (e.shiftKey ? e.deltaY : e.deltaX) / rect.width * zoomSpan;
+    zoomLo = Math.max(0, Math.min(dur - zoomSpan, zoomLo + d)); renderZoom(); renderOverview();
+  } else zoomBy(e.deltaY > 0 ? 1 : -1, zoomTimeAt(e, rect));
+}, { passive: false });
+$("zoomIn").onclick = () => zoomBy(-1, v.currentTime);
+$("zoomOut").onclick = () => zoomBy(1, v.currentTime);
+
 v.addEventListener("timeupdate", () => {
+  if (dragging) return;
   const h = $("tlHead"); if (h) h.style.left = (v.currentTime / dur * 100) + "%";
-  renderZoom();
+  followPlayhead(); renderZoom();
   if (stopAt != null && v.currentTime >= stopAt) { v.pause(); stopAt = null; }
 });
 v.addEventListener("play", () => $("play").textContent = "⏸ Pause");
 v.addEventListener("pause", () => $("play").textContent = "▶ Play");
-v.addEventListener("seeked", renderZoom);
+v.addEventListener("seeked", () => { if (!dragging) { followPlayhead(); renderZoom(); } });
+window.addEventListener("resize", () => renderZoom());
 
-// actions
+// ── edit actions ───────────────────────────────────────────────────────────
 const nowT = () => Math.round(v.currentTime * 10) / 10;
 function setEdge(edge, t) { const r = cur(); if (!r) return; change(() => {
   r[edge] = t; if (r.end <= r.start) { if (edge === "start") r.end = r.start + 1; else r.start = Math.max(0, r.end - 1); } }); sel = data.rallies.indexOf(r); render(); }
@@ -387,8 +572,8 @@ $("merge").onclick = mergeNext;
 $("add").onclick = addHere;
 $("gameStart").onclick = () => change(() => data.game_start = nowT());
 $("gameEnd").onclick = () => change(() => data.game_end = nowT());
-$("fAll").onclick = () => { filter = "all"; $("fAll").classList.add("on"); $("fTodo").classList.remove("on"); render(); };
-$("fTodo").onclick = () => { filter = "todo"; $("fTodo").classList.add("on"); $("fAll").classList.remove("on"); render(); };
+$("fAll").onclick = () => { filter = "all"; $("fAll").classList.add("on"); $("fTodo").classList.remove("on"); renderList(); };
+$("fTodo").onclick = () => { filter = "todo"; $("fTodo").classList.add("on"); $("fAll").classList.remove("on"); renderList(); };
 
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -405,8 +590,9 @@ document.addEventListener("keydown", (e) => {
   else if (k === "p" || k === "P") step(-1);
   else if (k === "a" || k === "A") addHere();
   else if (k === "s" || k === "S") splitHere();
+  else if (k === "+" || k === "=") zoomBy(-1, v.currentTime);
+  else if (k === "-" || k === "_") zoomBy(1, v.currentTime);
 });
-window.addEventListener("beforeunload", (e) => { if (saveTimer && $("saveState").textContent === "saving…") { save(); } });
 
 load();
 </script>
