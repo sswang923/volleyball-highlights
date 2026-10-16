@@ -18,7 +18,31 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color: var(--sel); }
-.wrap { max-width: 1100px; margin: 0 auto; padding: 12px 16px 40px; }
+.wrap { max-width: 1680px; margin: 0 auto; padding: 12px 16px 40px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 14px; align-items: start; }
+.events { position: sticky; top: 8px; height: calc(100vh - 16px); display: flex; flex-direction: column;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.events .ev-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+#evlist { overflow: auto; flex: 1; position: relative; margin-top: 4px; }
+.ev { display: grid; grid-template-columns: 34px 1fr auto; gap: 4px 6px; align-items: center; padding: 5px 4px;
+      border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; cursor: pointer; }
+.ev.sel { background: color-mix(in srgb, var(--sel) 14%, transparent); }
+.ev.deleted { opacity: .5; }
+.ev.deleted input { text-decoration: line-through; }
+.ev.cand { background: color-mix(in srgb, var(--game) 10%, transparent); }
+.ev.cand.sel { background: color-mix(in srgb, var(--game) 24%, transparent); }
+.ev.marker { grid-template-columns: 1fr auto; color: var(--game); font-weight: 600; }
+.ev-set { position: sticky; top: 0; z-index: 2; background: var(--panel); font-weight: 600; padding: 6px 4px 3px; border-bottom: 2px solid var(--line); }
+.ev .num { color: var(--muted); font-size: 12px; }
+.ev .times-in { display: flex; gap: 4px; align-items: center; }
+.ev input.t { width: 74px; font: 13px ui-monospace, Consolas, monospace; padding: 3px 4px; border: 1px solid var(--line);
+              border-radius: 5px; background: var(--bg); color: var(--ink); }
+.ev input.t.bad { border-color: var(--err); outline: 1px solid var(--err); }
+.ev .btns { display: flex; gap: 3px; }
+.ev .btns button, .ev .meta button { min-height: 26px; padding: 1px 7px; font-size: 12px; }
+.ev .meta { grid-column: 2 / 4; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.ev .meta button.on { outline: 2px solid var(--sel); color: var(--ink); }
+@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } .events { position: static; height: 70vh; } }
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 header h1 { font-size: 18px; margin: 0; }
 #saveState { margin-left: auto; font-size: 13px; color: var(--muted); }
@@ -59,10 +83,6 @@ button.on { outline: 2px solid var(--sel); }
 .times { font-variant-numeric: tabular-nums; color: var(--muted); }
 .legend { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-#list { max-height: 320px; overflow: auto; margin-top: 6px; position: relative; }
-.item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-variant-numeric: tabular-nums; }
-.item.sel { background: color-mix(in srgb, var(--sel) 14%, transparent); }
-.item.deleted { opacity: .5; text-decoration: line-through; }
 .chip { font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--auto); color: #1d1d1f; }
 .chip.ok { background: var(--ok); color: #fff; }
 .chip.deleted { background: var(--del); }
@@ -94,6 +114,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <span id="progress" class="times"></span>
     <span id="saveState">loading…</span>
   </header>
+<div class="layout"><div class="main">
 
   <video id="v" src="/video/{{ game }}" preload="metadata" controls playsinline></video>
 
@@ -187,12 +208,9 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <span class="times" id="gameTimes"></span>
     </div>
     <div class="row">
-      <div class="tabs"><button id="tabList" class="on">List</button><button id="tabText">Edit as text</button></div>
-      <span class="grow"></span>
-      <span id="listFilters"><button id="fAll" class="on">All</button> <button id="fTodo">To check</button> <button id="fCand">Possible</button></span>
-      <span class="times" id="counts"></span>
+      <button id="tabText">Edit as text</button>
+      <span class="times">The event list is in the column on the right (below on narrow screens).</span>
     </div>
-    <div id="listView"><div id="list"></div></div>
     <div id="textView" class="hidden">
       <div class="row">
         <button id="textApply" class="primary">Apply text</button>
@@ -206,9 +224,19 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
       <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
-      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · in the event column type a time and press <kbd>Enter</kbd> · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
+</div>
+<aside class="events" id="events">
+  <div class="ev-head">
+    <b>Events</b>
+    <span id="listFilters"><button class="small on" id="fAll">All</button> <button class="small" id="fTodo">To check</button> <button class="small" id="fCand">Possible</button></span>
+    <span class="times" id="counts" style="width:100%"></span>
+  </div>
+  <div id="evlist"></div>
+</aside>
+</div>
 {% endif %}
 </div>
 
@@ -355,11 +383,11 @@ $("textLoadFile").onclick = async () => {
   $("text").value = d.text; textDirty = true;
   $("textErrors").textContent = "Loaded from disk — press Apply text to use it.";
 };
-$("tabList").onclick = () => { $("tabList").classList.add("on"); $("tabText").classList.remove("on");
-  $("listView").classList.remove("hidden"); $("textView").classList.add("hidden"); $("listFilters").classList.remove("hidden"); };
-$("tabText").onclick = () => { $("tabText").classList.add("on"); $("tabList").classList.remove("on");
-  $("textView").classList.remove("hidden"); $("listView").classList.add("hidden"); $("listFilters").classList.add("hidden");
-  if (!textDirty) $("text").value = toText(); };
+$("tabText").onclick = () => {
+  const show = $("textView").classList.contains("hidden");
+  $("textView").classList.toggle("hidden", !show); $("tabText").classList.toggle("on", show);
+  if (show && !textDirty) $("text").value = toText();
+};
 
 // ── selection / playback ───────────────────────────────────────────────────
 function select(i, seek) {
@@ -369,7 +397,7 @@ function select(i, seek) {
   if (seek) { v.currentTime = Math.max(0, data.rallies[sel].start - 1.5); centerZoom(data.rallies[sel].start + 3); }
   render();
   // keep the selected row visible inside the list only — never scroll the page away from the controls
-  const el = document.querySelector(`.item[data-i="${sel}"]`), list = $("list");
+  const el = document.querySelector(`#evlist .ev[data-i="${sel}"]`), list = $("evlist");
   if (el && (el.offsetTop < list.scrollTop || el.offsetTop + el.offsetHeight > list.scrollTop + list.clientHeight))
     list.scrollTop = el.offsetTop - list.clientHeight / 3;
 }
@@ -546,30 +574,97 @@ function renderPanel() {
   $("progress").textContent = `${okc}/${live.length} checked`;
 }
 
+// Vertical event column: game start/end, sets, every rally with editable start/end,
+// status, serve and winner, plus possible rallies in purple. Typing a time + Enter applies it.
 function renderList() {
-  const nums = numbering(), wins = winners(), list = $("list"); list.innerHTML = "";
-  if (filter === "cand") {
-    const vc = visibleCands();
-    if (!vc.length) list.innerHTML = '<div class="item"><span></span><span>No possible rallies left to check.</span><span></span></div>';
-    vc.forEach(c => {
-      const d = document.createElement("div"); d.className = "item" + (sameCand(c, candSel) ? " sel" : "");
-      d.innerHTML = `<span>possible</span><span>${fmt(c.start)} → ${fmt(c.end)} · ball seen ${Math.round(c.seen * 100)}%</span><span class="chip" style="background:var(--game);color:#fff">check</span>`;
-      d.onclick = () => selectCand(c); list.appendChild(d);
-    });
-    return;
+  const list = $("evlist");
+  if (list.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;  // don't clobber typing
+  const keep = list.scrollTop, nums = numbering(), wins = winners(), sc = scoreAfter();
+  list.innerHTML = "";
+  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+  const timeInput = (val, onSet) => {
+    const i = el("input", "t"); i.value = val == null ? "" : fmt(val); i.placeholder = "—";
+    i.onclick = (e) => e.stopPropagation();
+    const commit = () => {
+      const txt = i.value.trim();
+      if (!txt) { onSet(null); return; }
+      const t = parseT(txt);
+      if (Number.isNaN(t) || t < 0 || t > dur) { i.classList.add("bad"); i.title = "Use m:ss.s or h:mm:ss.s"; return; }
+      i.classList.remove("bad"); i.blur(); onSet(Math.round(t * 10) / 10);
+    };
+    i.onkeydown = (e) => { e.stopPropagation();
+      if (e.key === "Enter") commit();
+      else if (e.key === "Escape") { i.blur(); render(); } };
+    i.onchange = commit;
+    return i;
+  };
+  const marker = (label, key) => {
+    const row = el("div", "ev marker");
+    const box = el("span", "times-in"); box.append(label + " ", timeInput(data[key], (t) => change(() => data[key] = t)));
+    const now = el("button", "small", "= now"); now.onclick = (e) => { e.stopPropagation(); change(() => data[key] = nowT()); };
+    row.append(box, now);
+    row.onclick = () => { if (data[key] != null) { v.currentTime = data[key]; centerZoom(data[key]); render(); } };
+    return row;
+  };
+
+  // one ordered stream of rallies and possible rallies
+  const items = data.rallies.map((r, i) => ({ kind: "rally", r, i, t: r.start }));
+  if (filter !== "todo") for (const c of visibleCands()) items.push({ kind: "cand", c, t: c.start });
+  items.sort((a, b) => a.t - b.t);
+
+  list.append(marker("Game start", "game_start"));
+  let curSet = null;
+  for (const it of items) {
+    if (filter === "todo" && (it.kind !== "rally" || it.r.status !== "auto")) continue;
+    if (filter === "cand" && it.kind !== "cand") continue;
+    if (it.kind === "rally" && it.r.set !== curSet && filter !== "cand") {
+      curSet = it.r.set;
+      const s0 = sc.get([...data.rallies].reverse().find(x => x.set === curSet && sc.get(x)));
+      list.append(el("div", "ev-set", `Set ${curSet}` + (s0 ? ` <span class="times">· Tyrants ${s0[0]}–${s0[1]}</span>` : "")));
+    }
+    if (it.kind === "cand") {
+      const c = it.c, row = el("div", "ev cand" + (sameCand(c, candSel) ? " sel" : ""));
+      row.append(el("span", "num", "?"), el("span", "", `${fmt(c.start)} → ${fmt(c.end)} <span class="times">possible · ball ${Math.round(c.seen * 100)}%</span>`));
+      const b = el("span", "btns");
+      const play = el("button", "", "▶"), yes = el("button", "", "＋"), no = el("button", "", "✗");
+      play.title = "Play"; yes.title = "It's a rally"; no.title = "Not a rally";
+      play.onclick = (e) => { e.stopPropagation(); selectCand(c, false); v.currentTime = Math.max(0, c.start - 1); stopAt = c.end + 1; v.play(); };
+      yes.onclick = (e) => { e.stopPropagation(); candSel = c; candYes(); };
+      no.onclick = (e) => { e.stopPropagation(); candSel = c; candNo(); };
+      b.append(play, yes, no); row.append(b);
+      row.onclick = () => selectCand(c);
+      list.append(row);
+      continue;
+    }
+    const r = it.r, i = it.i, ww = wins.get(r);
+    const row = el("div", "ev" + (i === sel && !candSel ? " sel" : "") + (r.status === "deleted" ? " deleted" : ""));
+    row.dataset.i = i;
+    const times = el("span", "times-in");
+    times.append(timeInput(r.start, (t) => { if (t == null) return; select(i, false); setEdge("start", t); }), "→",
+                 timeInput(r.end, (t) => { if (t == null) return; select(i, false); setEdge("end", t); }));
+    const b = el("span", "btns");
+    const play = el("button", "", "▶"), ok = el("button", r.status === "ok" ? "primary" : "", "✓"),
+          rm = el("button", "", r.status === "deleted" ? "↺" : "✗");
+    play.title = "Play rally"; ok.title = "Looks right"; rm.title = r.status === "deleted" ? "Restore" : "Remove";
+    play.onclick = (e) => { e.stopPropagation(); select(i, false); playRally(); };
+    ok.onclick = (e) => { e.stopPropagation(); change(() => r.status = r.status === "ok" ? "auto" : "ok"); };
+    rm.onclick = (e) => { e.stopPropagation(); change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); };
+    b.append(play, ok, rm);
+    row.append(el("span", "num", r.status === "deleted" ? "–" : "R" + (nums.get(r) || "")), times, b);
+    const meta = el("span", "meta");
+    const pick = (label, field, val, title) => { const x = el("button", r[field] === val ? "on" : "", label); x.title = title;
+      x.onclick = (e) => { e.stopPropagation(); change(() => r[field] = r[field] === val ? null : val); }; return x; };
+    const after = sc.get(r);
+    meta.append("serve", pick("T", "serve", "home", "Tyrants served"), pick("O", "serve", "away", "Opponent served"),
+                " won", pick("T", "winner", "home", "Tyrants won the point"), pick("O", "winner", "away", "Opponent won the point"),
+                ww && ww.who && !r.winner ? ` → ${TEAM[ww.who]}*` : "", after ? `  ${after[0]}–${after[1]}` : "",
+                r.status === "ok" ? "  ✓ checked" : "");
+    row.append(meta);
+    row.onclick = () => select(i, true);
+    list.append(row);
   }
-  data.rallies.forEach((x, i) => {
-    if (filter === "todo" && x.status !== "auto") return;
-    const d = document.createElement("div");
-    d.className = "item" + (i === sel ? " sel" : "") + (x.status === "deleted" ? " deleted" : "");
-    d.dataset.i = i;
-    const label = x.status === "ok" ? "checked" : x.status === "deleted" ? "removed" : "to check";
-    const ww = wins.get(x), win = (x.serve ? ` · serve ${TEAM[x.serve]}` : "") +
-      (ww && ww.who ? ` · won ${TEAM[ww.who]}${ww.how === "you" ? "" : "*"}` : "");
-    d.innerHTML = `<span>S${x.set} R${nums.get(x) || "–"}</span><span>${fmt(x.start)} → ${fmt(x.end)}${win}</span><span class="chip ${x.status}">${label}</span>`;
-    d.onclick = () => select(i, true);
-    list.appendChild(d);
-  });
+  list.append(marker("Game end", "game_end"));
+  list.scrollTop = keep;
 }
 
 let sigCache = null, sigBusy = false;
