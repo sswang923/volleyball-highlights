@@ -192,6 +192,8 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <button id="next">Next ⏭</button>
       <button id="speed">1×</button>
       <button id="reviewMode" title="Play each rally, pause at its end">Review mode</button>
+      <button id="rallyOnly" title="Play only the rallies — skip the gaps between them (R)">Rallies only</button>
+      <button id="rallyStart" title="Replay the current rally from its start (B)">⏮ Rally start</button>
       <button id="undo">↶ Undo</button>
     </div>
   </div>
@@ -256,7 +258,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
       <kbd>Enter</kbd> looks right · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
-      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · in the event column type a time and press <kbd>Enter</kbd> · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · <kbd>R</kbd> rallies-only playback · <kbd>B</kbd> back to rally start · in the event column type a time and press <kbd>Enter</kbd> · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
 </div>
@@ -456,8 +458,17 @@ async function load() {
   fetch(`/api/${GAME}/candidates`).then(r => r.json()).then(c => { cands = c.candidates || []; render(); });
   dur = d.duration || 1; applyGameBounds(); sorted();
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
-  const first = data.rallies.findIndex(r => r.status === "auto");
-  select(first >= 0 ? first : 0, true);
+  let resumeAt = null;
+  try { resumeAt = parseFloat(localStorage.getItem(`review.pos.${GAME}`)); } catch (e) {}
+  if (resumeAt > 0 && resumeAt < dur) {                 // pick up where you stopped last time
+    const i = data.rallies.findIndex(r => r.end >= resumeAt && shown(r));
+    select(i >= 0 ? i : 0, false);
+    v.currentTime = resumeAt; centerZoom(resumeAt); render();
+    flash(`Resumed at ${fmt(resumeAt)} — where you left off.`);
+  } else {
+    const first = data.rallies.findIndex(r => r.status === "auto");
+    select(first >= 0 ? first : 0, true);
+  }
   $("text").value = toText();
 }
 function queueSave() { $("saveState").textContent = "saving…"; clearTimeout(saveTimer); saveTimer = setTimeout(save, 700); }
@@ -1088,6 +1099,45 @@ $("fwd5").onclick = () => v.currentTime += 5;
 $("prev").onclick = () => step(-1);
 $("next").onclick = () => step(1);
 $("speed").onclick = () => { const s = [1, 1.5, 2, 4], i = (s.indexOf(v.playbackRate) + 1) % s.length; v.playbackRate = s[i]; $("speed").textContent = s[i] + "×"; };
+// ── rallies-only playback: skip everything between rallies ──────────────────
+// While playing, the video jumps from 1 s after a rally ends to 1 s before the next one starts.
+// Removed rallies, set breaks and time outside the game are skipped too. Stops after the last rally.
+const RO_PRE = 1.0, RO_POST = 1.0, RO_KEY = "review.rallyOnly";
+let rallyOnly = false, roTimer = null;
+function playable() { return data.rallies.filter(r => r.status !== "deleted" && shown(r)).sort((a, b) => a.start - b.start); }
+function rallyOnlyTick() {
+  if (!rallyOnly || v.paused || dragging || stopAt != null || seekBusy) return;
+  const t = v.currentTime, rs = playable();
+  const now = rs.find(r => t >= r.start - RO_PRE - 0.3 && t <= r.end + RO_POST);
+  if (now) {                                           // inside a rally: keep the selection on it
+    const i = data.rallies.indexOf(now);
+    if (i !== sel && !candSel) { sel = i; renderPanel(); renderList(); renderActions(); }
+    return;
+  }
+  const next = rs.find(r => r.start - RO_PRE > t);
+  if (!next) { v.pause(); flash("End of the last rally."); return; }
+  seekTo(next.start - RO_PRE);
+}
+function setRallyOnly(on) {
+  rallyOnly = on; $("rallyOnly").classList.toggle("on", on);
+  try { localStorage.setItem(RO_KEY, on ? "1" : ""); } catch (e) {}
+  clearInterval(roTimer);
+  if (on) { roTimer = setInterval(rallyOnlyTick, 100); flash("Rallies only: playback skips the gaps between rallies."); }
+}
+$("rallyOnly").onclick = () => setRallyOnly(!rallyOnly);
+// ⏮ Rally start: back to just before the start of the rally you're in (or the last one before you)
+function rallyStart() {
+  const t = v.currentTime, rs = playable();
+  const r = rs.find(x => t >= x.start - RO_PRE - 0.3 && t <= x.end + RO_POST) || [...rs].reverse().find(x => x.start <= t);
+  if (!r) return;
+  sel = data.rallies.indexOf(r); candSel = null;
+  seekTo(Math.max(0, r.start - RO_PRE)); centerZoom(r.start + 3); render(); v.play();
+}
+$("rallyStart").onclick = rallyStart;
+// remember the playhead per game so the next visit resumes there
+setInterval(() => { try { if (v.currentTime > 0) localStorage.setItem(`review.pos.${GAME}`, v.currentTime.toFixed(1)); } catch (e) {} }, 2000);
+try { if (localStorage.getItem(RO_KEY)) setRallyOnly(true); } catch (e) {}
+
 $("reviewMode").onclick = () => { reviewMode = !reviewMode; $("reviewMode").classList.toggle("on", reviewMode); if (reviewMode) playRally(); };
 $("undo").onclick = undo;
 $("playRally").onclick = playRally;
@@ -1140,6 +1190,8 @@ document.addEventListener("keydown", (e) => {
   else if (k === "a" || k === "A") addHere();
   else if (k === "s" || k === "S") splitHere();
   else if (k === "c" || k === "C") nextCand(e.shiftKey ? -1 : 1);
+  else if (k === "r" || k === "R") setRallyOnly(!rallyOnly);
+  else if (k === "b" || k === "B") rallyStart();
   else if (k === "+" || k === "=") zoomBy(-1, v.currentTime);
   else if (k === "-" || k === "_") zoomBy(1, v.currentTime);
 });
