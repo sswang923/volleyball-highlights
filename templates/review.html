@@ -141,8 +141,16 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <button data-nudge="end,0.2">+.2</button><button data-nudge="end,1">+1</button>
     </div>
     <div class="row">
-      <span class="times">Point</span>
-      <button data-win="home">Tyrants</button><button data-win="away">Opponent</button><button data-win="">?</button>
+      <span class="times">Served by</span>
+      <button data-serve="home">Tyrants</button><button data-serve="away">Opponent</button><button data-serve="">?</button>
+      <span class="times" id="serveNote"></span>
+    </div>
+    <div class="row">
+      <span class="times">Point won by</span>
+      <button data-win="home">Tyrants</button><button data-win="away">Opponent</button><button data-win="" title="Clear — use the next rally's server">auto</button>
+      <span class="times" id="winNote"></span>
+    </div>
+    <div class="row">
       <span class="times">Set</span><button id="setDown">−</button><span id="setNum">1</span><button id="setUp">+</button>
       <button id="split">Split at now</button>
       <button id="merge">Merge with next</button>
@@ -208,6 +216,26 @@ function numbering() {
   for (const r of data.rallies) if (r.status !== "deleted") { n[r.set] = (n[r.set] || 0) + 1; out.set(r, n[r.set]); }
   return out;
 }
+// Point winner: your pick if set, else whoever serves the next rally in the same set (side-out rule).
+function winners() {
+  const live = data.rallies.filter(r => r.status !== "deleted"), out = new Map();
+  live.forEach((r, i) => {
+    const nx = live[i + 1] && live[i + 1].set === r.set ? live[i + 1] : null;
+    if (r.winner) out.set(r, { who: r.winner, how: "you" });
+    else if (nx && nx.serve) out.set(r, { who: nx.serve, how: "next serve" });
+    else out.set(r, { who: null, how: nx ? "next serve unknown" : "last rally of set" });
+  });
+  return out;
+}
+function scoreAfter() {                      // running set score after each rally
+  const w = winners(), out = new Map(), sc = {};
+  for (const r of data.rallies) { if (r.status === "deleted") continue;
+    const s = sc[r.set] || (sc[r.set] = [0, 0]), who = w.get(r).who;
+    if (who === "home") s[0]++; else if (who === "away") s[1]++;
+    out.set(r, [...s]); }
+  return out;
+}
+const TEAM = { home: "Tyrants", away: "Opp" };
 function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
 function change(fn) { snapshot(); fn(); sorted(); render(); queueSave(); }
 
@@ -236,7 +264,8 @@ async function save() {
 function toText() {
   const nums = numbering(), L = [
     `# ${GAME} — rally list. Edit, then press "Apply text".`,
-    "# One rally per line:  start - end   [ok | check | removed]   [tyrants | opp]",
+    "# One rally per line:  start - end   [ok | check | removed]   [serve:tyrants | serve:opp]   [won:tyrants | won:opp]",
+    "# Leave out won: to take the winner from the next rally's server.",
     "# Times are m:ss.s or h:mm:ss.s. 'set N' starts a set. Lines starting with # are ignored.",
     "",
   ];
@@ -246,9 +275,10 @@ function toText() {
   for (const r of data.rallies) {
     if (r.set !== cur) { L.push("", `set ${r.set}`); cur = r.set; }
     const st = r.status === "ok" ? "ok" : r.status === "deleted" ? "removed" : "check";
-    const win = r.winner === "home" ? "tyrants" : r.winner === "away" ? "opp" : "";
+    const sv = r.serve ? `serve:${r.serve === "home" ? "tyrants" : "opp"}` : "";
+    const win = r.winner ? `won:${r.winner === "home" ? "tyrants" : "opp"}` : "";
     const n = nums.get(r) ? `# R${nums.get(r)}` : "";
-    L.push(`${fmt(r.start).padStart(9)} - ${fmt(r.end).padEnd(9)}  ${st.padEnd(7)} ${win.padEnd(7)} ${n}`.trimEnd());
+    L.push(`${fmt(r.start).padStart(9)} - ${fmt(r.end).padEnd(9)}  ${st.padEnd(7)} ${sv.padEnd(13)} ${win.padEnd(11)} ${n}`.trimEnd());
   }
   return L.join("\n") + "\n";
 }
@@ -267,11 +297,12 @@ function fromText(txt) {
       const s = parseT(m[1]), e = parseT(m[2]);
       if (Number.isNaN(s) || Number.isNaN(e)) { errs.push(ln + `bad time in "${line}"`); return; }
       if (e <= s) { errs.push(ln + "end must be after start"); return; }
-      const r = { start: s, end: e, set, status: "auto", winner: null };
+      const r = { start: s, end: e, set, status: "auto", winner: null, serve: null };
       for (const w of m[3].trim().toLowerCase().split(/\s+/).filter(Boolean)) {
         if (w === "ok") r.status = "ok"; else if (w === "check") r.status = "auto";
         else if (w === "removed") r.status = "deleted";
-        else if (w === "tyrants" || w === "home") r.winner = "home"; else if (w === "opp" || w === "away") r.winner = "away";
+        else if (/^serve:(tyrants|home)$/.test(w)) r.serve = "home"; else if (/^serve:(opp|away)$/.test(w)) r.serve = "away";
+        else if (/^(won:)?(tyrants|home)$/.test(w)) r.winner = "home"; else if (/^(won:)?(opp|away)$/.test(w)) r.winner = "away";
         else errs.push(ln + `unknown word "${w}"`);
       }
       if (e > dur + 1) errs.push(ln + `end ${fmt(e)} is past the end of the video (${fmt(dur)})`);
@@ -388,7 +419,12 @@ function renderPanel() {
     $("selTitle").textContent = `Set ${r.set} · Rally ${nums.get(r) || "—"}` + (r.status === "ok" ? " ✓" : r.status === "deleted" ? " (not a rally)" : "");
     $("selTimes").textContent = `${fmt(r.start)} → ${fmt(r.end)}  (${(r.end - r.start).toFixed(1)} s)`;
     $("setNum").textContent = r.set;
+    const w = winners().get(r), sc = scoreAfter().get(r);
     document.querySelectorAll("[data-win]").forEach(b => b.classList.toggle("on", (r.winner || "") === b.dataset.win));
+    document.querySelectorAll("[data-serve]").forEach(b => b.classList.toggle("on", (r.serve || "") === b.dataset.serve));
+    $("serveNote").textContent = r.serve ? "" : "unknown — watch the serve and tap";
+    $("winNote").textContent = w && w.who ? `${TEAM[w.who]} (${w.how === "you" ? "your pick" : "from the next serve"})` +
+      (sc ? ` · score after: Tyrants ${sc[0]}–${sc[1]}` : "") : (w ? `unknown (${w.how})` : "");
   }
   $("gameTimes").textContent = `game ${fmt(data.game_start)} → ${fmt(data.game_end)}`;
   const live = data.rallies.filter(x => x.status !== "deleted"), okc = live.filter(x => x.status === "ok").length;
@@ -397,14 +433,15 @@ function renderPanel() {
 }
 
 function renderList() {
-  const nums = numbering(), list = $("list"); list.innerHTML = "";
+  const nums = numbering(), wins = winners(), list = $("list"); list.innerHTML = "";
   data.rallies.forEach((x, i) => {
     if (filter === "todo" && x.status !== "auto") return;
     const d = document.createElement("div");
     d.className = "item" + (i === sel ? " sel" : "") + (x.status === "deleted" ? " deleted" : "");
     d.dataset.i = i;
     const label = x.status === "ok" ? "checked" : x.status === "deleted" ? "removed" : "to check";
-    const win = x.winner === "home" ? " · Tyrants" : x.winner === "away" ? " · Opp" : "";
+    const ww = wins.get(x), win = (x.serve ? ` · serve ${TEAM[x.serve]}` : "") +
+      (ww && ww.who ? ` · won ${TEAM[ww.who]}${ww.how === "you" ? "" : "*"}` : "");
     d.innerHTML = `<span>S${x.set} R${nums.get(x) || "–"}</span><span>${fmt(x.start)} → ${fmt(x.end)}${win}</span><span class="chip ${x.status}">${label}</span>`;
     d.onclick = () => select(i, true);
     list.appendChild(d);
@@ -539,10 +576,10 @@ function setEdge(edge, t) { const r = cur(); if (!r) return; change(() => {
 function markOk() { const r = cur(); if (!r) return; change(() => r.status = "ok"); sel = data.rallies.indexOf(r); step(1); }
 function markDel() { const r = cur(); if (!r) return; change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); step(1); }
 function addHere() { const t = nowT(); const prev = [...data.rallies].reverse().find(r => r.start <= t);
-  const r = { start: t, end: t + 8, set: prev ? prev.set : 1, winner: null, status: "ok" };
+  const r = { start: t, end: t + 8, set: prev ? prev.set : 1, winner: null, serve: null, status: "ok" };
   change(() => data.rallies.push(r)); select(data.rallies.indexOf(r), false); }
 function splitHere() { const r = cur(), t = nowT(); if (!r || t <= r.start + 0.5 || t >= r.end - 0.5) { alert("Move the playhead inside the selected rally first."); return; }
-  const b = { start: t + 0.1, end: r.end, set: r.set, winner: r.winner, status: "auto" };
+  const b = { start: t + 0.1, end: r.end, set: r.set, winner: r.winner, serve: null, status: "auto" };
   change(() => { r.end = t; r.winner = null; data.rallies.push(b); }); select(data.rallies.indexOf(r), false); }
 function mergeNext() { const r = cur(); if (!r) return; const i = data.rallies.indexOf(r);
   const nx = data.rallies.slice(i + 1).find(x => x.status !== "deleted"); if (!nx) return;
@@ -565,6 +602,7 @@ $("endNow").onclick = () => setEdge("end", nowT());
 document.querySelectorAll("[data-nudge]").forEach(b => b.onclick = () => {
   const [edge, d] = b.dataset.nudge.split(","); const r = cur(); if (r) setEdge(edge, Math.round((r[edge] + parseFloat(d)) * 10) / 10); });
 document.querySelectorAll("[data-win]").forEach(b => b.onclick = () => { const r = cur(); if (r) change(() => r.winner = b.dataset.win || null); });
+document.querySelectorAll("[data-serve]").forEach(b => b.onclick = () => { const r = cur(); if (r) change(() => r.serve = b.dataset.serve || null); });
 $("setDown").onclick = () => { const r = cur(); if (r && r.set > 1) change(() => r.set -= 1); };
 $("setUp").onclick = () => { const r = cur(); if (r && r.set < 5) change(() => r.set += 1); };
 $("split").onclick = splitHere;

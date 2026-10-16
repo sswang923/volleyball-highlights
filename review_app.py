@@ -75,12 +75,43 @@ def rallies_from_events(ev):
             if not s:
                 continue
             out.append({"start": s["t_s"], "end": e["t_s"], "set": e.get("set") or 1,
-                        "winner": e.get("score_by"),
+                        # winners derived from the next serve are recomputed, not kept as manual picks
+                        "winner": None if e.get("winner_from") == "next_serve" else e.get("score_by"),
+                        "serve": s.get("serve") if s.get("serve") in ("home", "away") else None,
                         "status": "ok" if e.get("confirmed") else "auto"})
     out.sort(key=lambda r: r["start"])
     gs = next((e["t_s"] for e in ev if e.get("event") == "game_start"), None)
     ge = next((e["t_s"] for e in ev if e.get("event") == "game_end"), None)
     return out, gs, ge
+
+
+def fill_serves(key, rallies):
+    """Reviews saved before serves existed: take the detector's serve guess for the overlapping rally."""
+    if all("serve" in r for r in rallies):
+        return
+    auto = LABELS / key / f"auto_events_{key}.json"
+    guesses = rallies_from_events(json.load(open(auto)).get("events", []))[0] if auto.exists() else []
+    for r in rallies:
+        if "serve" in r:
+            continue
+        best = max(guesses, key=lambda g: min(r["end"], g["end"]) - max(r["start"], g["start"]), default=None)
+        ov = (min(r["end"], best["end"]) - max(r["start"], best["start"])) if best else 0
+        r["serve"] = best["serve"] if ov > 0 else None
+
+
+def effective_winners(rallies):
+    """Point winner per rally: the user's pick, else the server of the next rally in the same set."""
+    live = [r for r in sorted(rallies, key=lambda r: r["start"]) if r.get("status") != "deleted"]
+    out = {}
+    for i, r in enumerate(live):
+        nxt = live[i + 1] if i + 1 < len(live) and live[i + 1]["set"] == r["set"] else None
+        if r.get("winner") in ("home", "away"):
+            out[id(r)] = (r["winner"], "manual")
+        elif nxt and nxt.get("serve") in ("home", "away"):
+            out[id(r)] = (nxt["serve"], "next_serve")
+        else:
+            out[id(r)] = (None, None)
+    return out
 
 
 def load_review(key):
@@ -89,6 +120,7 @@ def load_review(key):
     if rv.exists():
         d = json.load(open(rv))
         d["source"] = rv.name
+        fill_serves(key, d["rallies"])
         return d
     for name in (f"auto_events_{key}.json", f"event_log_{key}.json"):
         p = lab / name
@@ -110,6 +142,7 @@ def export_event_log(key, d):
         ev.append({"event": kind, "t_s": round(float(t), 3), "t": fmt(t), "video_file": vf, **kw})
 
     rallies = sorted((r for r in d["rallies"] if r.get("status") != "deleted"), key=lambda r: r["start"])
+    wins = effective_winners(rallies)
     if d.get("game_start") is not None:
         add("game_start", d["game_start"], set=None, rally_in_set=None, score_by=None)
     for s in sorted({r["set"] for r in rallies}):
@@ -118,8 +151,9 @@ def export_event_log(key, d):
         for k, r in enumerate(rs, 1):
             ok = r.get("status") == "ok"
             common = dict(set=s, rally_in_set=k, auto=not ok, confirmed=ok)
-            add("rally_start", r["start"], score_by=None, **common)
-            add("rally_end", r["end"], score_by=r.get("winner"), **common)
+            win, src = wins[id(r)]
+            add("rally_start", r["start"], score_by=None, serve=r.get("serve"), **common)
+            add("rally_end", r["end"], score_by=win, winner_from=src, **common)
         add("set_end", rs[-1]["end"] + 1, set=s, rally_in_set=None, score_by=None)
     if d.get("game_end") is not None:
         add("game_end", d["game_end"], set=None, rally_in_set=None, score_by=None)
@@ -171,6 +205,7 @@ def api_rallies(key):
             e = s + 1.0
         clean.append({"start": round(s, 2), "end": round(e, 2), "set": int(r.get("set") or 1),
                       "winner": r.get("winner") if r.get("winner") in ("home", "away") else None,
+                      "serve": r.get("serve") if r.get("serve") in ("home", "away") else None,
                       "status": r.get("status") if r.get("status") in ("auto", "ok", "deleted") else "auto"})
     clean.sort(key=lambda r: r["start"])
     out = {"game": key, "saved_at": datetime.now().isoformat(timespec="seconds"),

@@ -172,7 +172,8 @@ def score_rallies(segs, set_spans, ball):
                 by = "home" if h >= w else "away"
             h += by == "home"
             w += by == "away"
-            rallies.append({"start": s[0], "end": s[1], "set": si, "score_by": by})
+            server = None if not sides[k] else (near_team if sides[k] == "near" else far_team)
+            rallies.append({"start": s[0], "end": s[1], "set": si, "score_by": by, "serve": server})
     return rallies
 
 

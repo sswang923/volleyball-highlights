@@ -282,7 +282,7 @@ def write_events(g, rallies, spans, set_scores, method):
             h += r["score_by"] == "home"
             w += r["score_by"] == "away"
             common = dict(set=i, rally_in_set=k, auto=True, confirmed=False)
-            add("rally_start", r["start"], score_by=None, **common)
+            add("rally_start", r["start"], score_by=None, serve=r.get("serve"), **common)
             add("rally_end", r["end"], score_by=r["score_by"], score_after=f"{h}-{w}", **common)
         add("set_end", rs[-1]["end"] + 1, set=i, rally_in_set=None, score_by=None)
     for n, e in enumerate(ev):
