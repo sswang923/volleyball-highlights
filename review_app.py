@@ -2,8 +2,8 @@
 """
 Rally review web app — watch detected rallies and fix them.
 
-    python3 review_app.py [--port 8771] [--host 127.0.0.1]
-    open http://localhost:8771/
+    python3 review_app.py [--port 8772] [--host 127.0.0.1]
+    open http://localhost:8772/
 
 Per game it plays the 720p working copy (work/<key>/proxy.mp4, falls back to the
 stitched video) and loads, in order of preference:
@@ -381,7 +381,7 @@ def video(key):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8771)
+    ap.add_argument("--port", type=int, default=8772)
     a = ap.parse_args()
     print(f"Rally review: http://localhost:{a.port}/", flush=True)
     app.run(host=a.host, port=a.port, threaded=True)
