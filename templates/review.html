@@ -79,6 +79,14 @@ header h1 { font-size: 18px; margin: 0; }
 .seg.sel { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
 .edge-mark { position: absolute; top: 2px; bottom: 16px; width: 4px; margin-left: -2px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 35%, transparent); z-index: 3; pointer-events: none; }
 .seg.sel ~ .edge-mark.sel, .edge-mark.sel { background: var(--sel); }
+.setmark { position: absolute; top: 0; bottom: 0; width: 3px; margin-left: -1px; background: var(--sel); z-index: 3; pointer-events: none; }
+.setmark.end { background: var(--ink); opacity: .6; }
+.setmark .lbl { position: absolute; top: 0; left: 4px; font-size: 10px; color: var(--sel); font-weight: 700; white-space: nowrap; }
+.gapband { position: absolute; top: 0; bottom: 0; z-index: 1; pointer-events: none;
+           background: repeating-linear-gradient(-45deg, color-mix(in srgb, var(--ink) 12%, transparent) 0 6px, transparent 6px 12px); }
+.ev-set .setrow { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-weight: 400; font-size: 12px; margin-top: 3px; }
+.ev-set .setrow button { min-height: 24px; padding: 0 6px; font-size: 11px; }
+.ev.break { color: var(--muted); font-style: italic; grid-template-columns: 1fr; }
 .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--game); z-index: 3; pointer-events: none; }
 .head { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--head); z-index: 4; pointer-events: none; }
 .tick { position: absolute; bottom: 1px; font-size: 10px; color: var(--muted); transform: translateX(-50%); pointer-events: none; }
@@ -163,6 +171,8 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <button id="actEnd" title="Selected rally ends at the playhead (])">⇥ End = now</button>
       <button id="actAutoEnd" title="Guess the end from the signals">⇥ Auto end</button>
       <button id="actNextCand" title="Next possible rally (C)">Next possible ⏭</button>
+      <button id="actSetStart" title="A new set starts at the playhead">Set starts = now</button>
+      <button id="actSetEnd" title="The set in progress ends at the playhead">Set ends = now</button>
       <span id="flash"></span>
     </div>
     <div class="legend" id="sigLegend">
@@ -310,12 +320,24 @@ function scoreAfter() {                      // running set score after each ral
 }
 const TEAM = { home: "Tyrants", away: "Opp" };
 function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
-// Rallies entirely before the game start (or after the game end) are removed automatically and
-// hidden; moving the bound back brings them back with their previous status.
+// Set marks: data.sets = [{start, end}] in time order, set number = position + 1.
+// A rally belongs to the last set that starts at or before it. Between one set's end and the next
+// set's start is a break: rallies there are removed and hidden like rallies outside the game.
+function sortSets() { (data.sets = data.sets || []).sort((a, b) => a.start - b.start); }
+function setBreaks() {
+  const out = [], ss = data.sets || [];
+  for (let k = 0; k + 1 < ss.length; k++) if (ss[k].end != null && ss[k + 1].start > ss[k].end) out.push([ss[k].end, ss[k + 1].start]);
+  return out;
+}
+function setOf(t) { const ss = data.sets || []; let n = 0; ss.forEach((x, k) => { if (x.start <= t + 0.05) n = k + 1; }); return Math.max(1, n); }
+// Rallies entirely before the game start (or after the game end, or inside a set break) are removed
+// automatically and hidden; moving the bound back brings them back with their previous status.
 function applyGameBounds() {
-  const gs = data.game_start, ge = data.game_end;
+  const gs = data.game_start, ge = data.game_end, breaks = setBreaks();
+  if ((data.sets || []).length) for (const r of data.rallies) r.set = setOf(r.start);
   for (const r of data.rallies) {
-    const outside = (gs != null && r.end <= gs) || (ge != null && r.start >= ge);
+    const mid = (r.start + r.end) / 2;
+    const outside = (gs != null && r.end <= gs) || (ge != null && r.start >= ge) || breaks.some(([a, b]) => mid > a && mid < b);
     if (outside && !r.outside) { r.prevStatus = r.status; r.status = "deleted"; r.outside = true; }
     else if (!outside && r.outside) { r.status = r.prevStatus || "auto"; delete r.outside; delete r.prevStatus; }
   }
@@ -326,8 +348,29 @@ function change(fn) {
   const hidden = data.rallies.filter(r => r.outside).length;
   applyGameBounds(); sorted(); render(); queueSave();
   const now = data.rallies.filter(r => r.outside).length;
-  if (now > hidden) flash(`${now - hidden} rall${now - hidden === 1 ? "y" : "ies"} outside the game removed.`);
-  else if (now < hidden) flash(`${hidden - now} rall${hidden - now === 1 ? "y" : "ies"} back inside the game restored.`);
+  if (now > hidden) flash(`${now - hidden} rall${now - hidden === 1 ? "y" : "ies"} outside the game / in a set break removed.`);
+  else if (now < hidden) flash(`${hidden - now} rall${hidden - now === 1 ? "y" : "ies"} restored.`);
+}
+function markSetStart(t) {
+  t = Math.round(t * 10) / 10;
+  change(() => {
+    sortSets();
+    const near = data.sets.find(x => Math.abs(x.start - t) < 2);
+    if (near) near.start = t; else data.sets.push({ start: t, end: null });
+    sortSets();
+    const k = data.sets.findIndex(x => x.start === t);          // the previous set ends no later than this one starts
+    if (k > 0 && data.sets[k - 1].end != null && data.sets[k - 1].end > t) data.sets[k - 1].end = t;
+  });
+  flash(`Set ${setOf(t)} starts at ${fmt(t)}.`);
+}
+function markSetEnd(t) {
+  t = Math.round(t * 10) / 10;
+  sortSets();
+  if (!data.sets.length) { change(() => data.sets.push({ start: data.game_start ?? 0, end: t })); flash(`Set 1 ends at ${fmt(t)}.`); return; }
+  const k = data.sets.map(x => x.start <= t).lastIndexOf(true);
+  if (k < 0) { flash("No set starts before this point — mark the set start first."); return; }
+  change(() => data.sets[k].end = t);
+  flash(`Set ${k + 1} ends at ${fmt(t)}.`);
 }
 
 // ── seeking that keeps up with a drag: only one seek in flight, the newest position wins ──
@@ -409,7 +452,7 @@ loadView();
 // ── load / save ─────────────────────────────────────────────────────────────
 async function load() {
   const r = await fetch(`/api/${GAME}/rallies`); const d = await r.json();
-  data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end, dismissed: d.dismissed || [] };
+  data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end, dismissed: d.dismissed || [], sets: d.sets || [] };
   fetch(`/api/${GAME}/candidates`).then(r => r.json()).then(c => { cands = c.candidates || []; render(); });
   dur = d.duration || 1; applyGameBounds(); sorted();
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
@@ -434,14 +477,17 @@ function toText() {
     `# ${GAME} — rally list. Edit, then press "Apply text".`,
     "# One rally per line:  start - end   [ok | check | removed]   [serve:tyrants | serve:opp]   [won:tyrants | won:opp]",
     "# Leave out won: to take the winner from the next rally's server.",
-    "# Times are m:ss.s or h:mm:ss.s. 'set N' starts a set. Lines starting with # are ignored.",
+    "# Times are m:ss.s or h:mm:ss.s. 'set N' starts a group; 'set N start T end T' also marks the set's start/end.",
+    "# Rallies between one set's end and the next set's start are removed. Lines starting with # are ignored.",
     "",
   ];
   L.push(`game_start ${data.game_start == null ? "-" : fmt(data.game_start)}`);
   L.push(`game_end   ${data.game_end == null ? "-" : fmt(data.game_end)}`);
   let cur = null;
+  const setLine = (n) => { const x = (data.sets || [])[n - 1];
+    return x ? `set ${n}  start ${fmt(x.start)}` + (x.end != null ? `  end ${fmt(x.end)}` : "") : `set ${n}`; };
   for (const r of data.rallies) {
-    if (r.set !== cur) { L.push("", `set ${r.set}`); cur = r.set; }
+    if (r.set !== cur) { L.push("", setLine(r.set)); cur = r.set; }
     const st = r.status === "ok" ? "ok" : r.status === "deleted" ? "removed" : "check";
     const sv = r.serve ? `serve:${r.serve === "home" ? "tyrants" : "opp"}` : "";
     const win = r.winner ? `won:${r.winner === "home" ? "tyrants" : "opp"}` : "";
@@ -451,7 +497,7 @@ function toText() {
   return L.join("\n") + "\n";
 }
 function fromText(txt) {
-  const out = { rallies: [], game_start: null, game_end: null }, errs = [];
+  const out = { rallies: [], game_start: null, game_end: null, sets: [] }, errs = [];
   let set = 1;
   txt.split("\n").forEach((raw, i) => {
     const line = raw.replace(/#.*/, "").trim(); if (!line) return;
@@ -460,7 +506,14 @@ function fromText(txt) {
     if ((m = line.match(/^game_(start|end)\s+(\S+)$/i))) {
       const t = m[2] === "-" ? null : parseT(m[2]);
       if (Number.isNaN(t)) errs.push(ln + `bad time "${m[2]}"`); else out["game_" + m[1].toLowerCase()] = t;
-    } else if ((m = line.match(/^set\s+(\d+)$/i))) { set = parseInt(m[1]);
+    } else if ((m = line.match(/^set\s+(\d+)(?:\s+start\s+(\S+))?(?:\s+end\s+(\S+))?$/i))) {
+      set = parseInt(m[1]);
+      if (m[2]) {
+        const st = parseT(m[2]), en = m[3] ? parseT(m[3]) : null;
+        if (Number.isNaN(st) || Number.isNaN(en)) errs.push(ln + `bad set time in "${line}"`);
+        else if (en != null && en <= st) errs.push(ln + "set end must be after its start");
+        else out.sets.push({ start: st, end: en });
+      }
     } else if ((m = line.match(/^(\S+)\s*-\s*(\S+)(.*)$/))) {
       const s = parseT(m[1]), e = parseT(m[2]);
       if (Number.isNaN(s) || Number.isNaN(e)) { errs.push(ln + `bad time in "${line}"`); return; }
@@ -488,7 +541,8 @@ $("textApply").onclick = () => {
   const { out, errs } = fromText($("text").value);
   $("textErrors").textContent = errs.join("\n");
   if (errs.length) return;
-  change(() => { data.rallies = out.rallies; data.game_start = out.game_start; data.game_end = out.game_end; });
+  change(() => { data.rallies = out.rallies; data.game_start = out.game_start; data.game_end = out.game_end;
+                 if (out.sets.length || !(data.sets || []).length) data.sets = out.sets; sortSets(); });
   textDirty = false; $("text").value = toText();
   $("textErrors").textContent = `Applied: ${out.rallies.length} rallies.`;
 };
@@ -530,7 +584,7 @@ function centerZoom(t) { zoomLo = Math.max(0, Math.min(dur - zoomSpan, t - zoomS
 function setZoom(span, anchorT) {
   const a = anchorT == null ? zoomLo + zoomSpan / 2 : anchorT, frac = (a - zoomLo) / zoomSpan;
   zoomSpan = span; zoomLo = Math.max(0, Math.min(dur - zoomSpan, a - frac * zoomSpan));
-  $("zoomLabel").textContent = span >= 120 ? `${span / 60} min` : `${span} s`; render();
+  $("zoomLabel").textContent = span >= 120 ? `${+(span / 60).toFixed(1)} min` : `${span} s`; render();
 }
 function zoomBy(dir, anchorT) {
   const i = ZOOM_LEVELS.indexOf(zoomSpan), j = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i + dir));
@@ -548,10 +602,10 @@ const overlap = (a, b) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start,
 // contain or overlap a rally. Pieces under 3 s (6 s when touching a rally) are dropped. Memoised per edit.
 let candMemo = { key: null, list: [] };
 function visibleCands() {
-  const key = JSON.stringify([data.rallies, data.dismissed, data.game_start, data.game_end, cands.length]);
+  const key = JSON.stringify([data.rallies, data.dismissed, data.game_start, data.game_end, data.sets, cands.length]);
   if (candMemo.key === key) return candMemo.list;
   const blocks = data.rallies.filter(r => r.status !== "deleted").map(r => [r.start, r.end])
-    .concat((data.dismissed || []).map(([a, b]) => [a, b])).sort((x, y) => x[0] - y[0]);
+    .concat((data.dismissed || []).map(([a, b]) => [a, b])).concat(setBreaks()).sort((x, y) => x[0] - y[0]);
   const out = [];
   for (const c of cands) {
     let pieces = [[Math.max(c.start, data.game_start ?? 0), Math.min(c.end, data.game_end ?? Infinity)]];
@@ -636,7 +690,23 @@ function renderOverview() {
   }
   for (const t of [data.game_start, data.game_end]) if (t != null) {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = (t / dur * 100) + "%"; tl.appendChild(m); }
+  drawSets(tl, (t) => (t / dur * 100) + "%", 0, dur);
   const h = document.createElement("div"); h.className = "head"; h.id = "tlHead"; h.style.left = (v.currentTime / dur * 100) + "%"; tl.appendChild(h);
+}
+
+function drawSets(host, X, lo, hi) {
+  for (const [a, b] of setBreaks()) if (b > lo && a < hi) {
+    const g = document.createElement("div"); g.className = "gapband"; g.style.left = X(Math.max(a, lo));
+    g.style.width = `calc(${X(Math.min(b, hi))} - ${X(Math.max(a, lo))})`; g.title = "set break"; host.appendChild(g);
+  }
+  (data.sets || []).forEach((x, k) => {
+    for (const [t, cls, lbl] of [[x.start, "", `S${k + 1}`], [x.end, " end", ""]]) {
+      if (t == null || t < lo || t > hi) continue;
+      const m = document.createElement("div"); m.className = "setmark" + cls; m.style.left = X(t);
+      if (lbl) m.innerHTML = `<span class="lbl">${lbl}</span>`;
+      host.appendChild(m);
+    }
+  });
 }
 
 function renderZoom() {
@@ -648,6 +718,7 @@ function renderZoom() {
   }
   for (const t of [data.game_start, data.game_end]) if (t != null && t >= lo && t <= lo + span) {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = X(t); z.appendChild(m); }
+  drawSets(z, X, lo, lo + span);
   for (const c of visibleCands()) {
     if (c.end < lo || c.start > lo + span) continue;
     const d = document.createElement("div"); d.className = "seg cand" + (sameCand(c, candSel) ? " sel" : "");
@@ -724,8 +795,13 @@ function renderList() {
     return row;
   };
 
-  // one ordered stream of rallies and possible rallies
+  // one ordered stream of rallies, possible rallies and set marks
   const items = data.rallies.map((r, i) => ({ kind: "rally", r, i, t: r.start })).filter(it => shown(it.r));
+  const marked = (data.sets || []).length > 0;
+  (data.sets || []).forEach((x, k) => {
+    items.push({ kind: "set", k, t: x.start - 0.001 });
+    if (x.end != null) items.push({ kind: "setend", k, t: x.end });
+  });
   if (filter !== "todo") for (const c of visibleCands()) items.push({ kind: "cand", c, t: c.start });
   items.sort((a, b) => a.t - b.t);
 
@@ -734,7 +810,31 @@ function renderList() {
   for (const it of items) {
     if (filter === "todo" && (it.kind !== "rally" || it.r.status !== "auto")) continue;
     if (filter === "cand" && it.kind !== "cand") continue;
-    if (it.kind === "rally" && it.r.set !== curSet && filter !== "cand") {
+    if (it.kind === "set" || it.kind === "setend") {
+      if (filter === "cand" && it.kind === "set") continue;
+      const x = data.sets[it.k], n = it.k + 1;
+      if (it.kind === "setend") {
+        const nx = data.sets[it.k + 1];
+        list.append(el("div", "ev break", `Set ${n} ends ${fmt(x.end)}` + (nx ? ` — break until set ${n + 1} (${fmt(nx.start)})` : "")));
+        continue;
+      }
+      curSet = n;
+      const lastR = [...data.rallies].reverse().find(r => r.set === n && shown(r) && sc.get(r));
+      const s0 = lastR ? sc.get(lastR) : null;
+      const head = el("div", "ev-set", `Set ${n}` + (s0 ? ` <span class="times">· Tyrants ${s0[0]}–${s0[1]}</span>` : ""));
+      const row = el("div", "setrow");
+      const nowBtn = (label, fn) => { const b = el("button", "", label); b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; };
+      row.append("start", timeInput(x.start, (t) => { if (t == null) return; change(() => { x.start = t; sortSets(); }); }),
+                 nowBtn("= now", () => change(() => { x.start = nowT(); sortSets(); })),
+                 " end", timeInput(x.end, (t) => change(() => x.end = t)),
+                 nowBtn("= now", () => change(() => x.end = nowT())),
+                 nowBtn("✗", () => change(() => data.sets.splice(it.k, 1))));
+      head.append(row);
+      head.onclick = () => { seekTo(x.start); centerZoom(x.start); render(); };
+      list.append(head);
+      continue;
+    }
+    if (it.kind === "rally" && !marked && it.r.set !== curSet && filter !== "cand") {
       curSet = it.r.set;
       const s0 = sc.get([...data.rallies].reverse().find(x => x.set === curSet && sc.get(x)));
       list.append(el("div", "ev-set", `Set ${curSet}` + (s0 ? ` <span class="times">· Tyrants ${s0[0]}–${s0[1]}</span>` : "")));
@@ -1021,6 +1121,8 @@ $("actStart").onclick = () => setEdge("start", nowT());
 $("actEnd").onclick = () => setEdge("end", nowT());
 $("actAutoEnd").onclick = autoEnd;
 $("actNextCand").onclick = () => nextCand(1);
+$("actSetStart").onclick = () => markSetStart(nowT());
+$("actSetEnd").onclick = () => markSetEnd(nowT());
 
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;

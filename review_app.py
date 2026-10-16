@@ -34,6 +34,7 @@ KEY_RE = re.compile(r"^\d{8}_game\d{2}$")
 RANGE_RE = re.compile(r"bytes=(\d+)-(\d*)")
 
 app = Flask(__name__, template_folder=str(HERE / "templates"))
+app.config["TEMPLATES_AUTO_RELOAD"] = True      # page edits apply on reload, no server restart
 _durations = {}
 
 
@@ -150,14 +151,17 @@ def export_event_log(key, d):
         add("game_start", d["game_start"], set=None, rally_in_set=None, score_by=None)
     for s in sorted({r["set"] for r in rallies}):
         rs = [r for r in rallies if r["set"] == s]
-        add("set_start", rs[0]["start"], set=s, rally_in_set=None, score=None)
+        marks = d.get("sets") or []
+        mark = marks[s - 1] if 0 < s <= len(marks) else None
+        add("set_start", mark["start"] if mark else rs[0]["start"], set=s, rally_in_set=None, score=None)
         for k, r in enumerate(rs, 1):
             ok = r.get("status") == "ok"
             common = dict(set=s, rally_in_set=k, auto=not ok, confirmed=ok)
             win, src = wins[id(r)]
             add("rally_start", r["start"], score_by=None, serve=r.get("serve"), **common)
             add("rally_end", r["end"], score_by=win, winner_from=src, **common)
-        add("set_end", rs[-1]["end"] + 1, set=s, rally_in_set=None, score_by=None)
+        add("set_end", mark["end"] if mark and mark.get("end") is not None else rs[-1]["end"] + 1,
+            set=s, rally_in_set=None, score_by=None)
     if d.get("game_end") is not None:
         add("game_end", d["game_end"], set=None, rally_in_set=None, score_by=None)
     ev.sort(key=lambda e: e["t_s"])
@@ -214,9 +218,12 @@ def api_rallies(key):
                          if r.get("outside") else {})})
     clean.sort(key=lambda r: r["start"])
     dismissed = [[round(float(a), 2), round(float(b), 2)] for a, b in d.get("dismissed", []) if float(b) > float(a)]
+    sets = sorted(({"start": round(float(x["start"]), 2),
+                    "end": round(float(x["end"]), 2) if x.get("end") is not None else None}
+                   for x in d.get("sets", []) if x.get("start") is not None), key=lambda x: x["start"])
     out = {"game": key, "saved_at": datetime.now().isoformat(timespec="seconds"),
            "game_start": d.get("game_start"), "game_end": d.get("game_end"), "rallies": clean,
-           "dismissed": dismissed}
+           "dismissed": dismissed, "sets": sets}
     (LABELS / key).mkdir(parents=True, exist_ok=True)
     export_event_log(key, out)
     rv = LABELS / key / f"review_{key}.json"
