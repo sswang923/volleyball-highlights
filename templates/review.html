@@ -245,7 +245,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     </div>
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
-      <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
+      <kbd>Enter</kbd> looks right · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
       <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · in the event column type a time and press <kbd>Enter</kbd> · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
@@ -930,7 +930,10 @@ function setEdge(edge, t) { const r = cur(); if (!r) return;
   });
   if (Math.abs(r[edge] - t) > 0.05) flash(`Stopped at ${fmt(r[edge])} — rallies can't overlap.`);
   sel = data.rallies.indexOf(r); render(); }
-function markOk() { const r = cur(); if (!r) return; change(() => r.status = "ok"); sel = data.rallies.indexOf(r); step(1); }
+function markOk() {                      // mark checked in place — the video keeps playing where it is
+  const r = cur(); if (!r) return;
+  change(() => r.status = "ok"); sel = data.rallies.indexOf(r); render();
+}
 function markDel() {                     // remove / restore in place — the video keeps playing where it is
   const r = cur(); if (!r) return;
   change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); render();

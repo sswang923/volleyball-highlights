@@ -320,7 +320,7 @@ def open_review(game: str = "") -> dict:
     Saves go to labels/<game>/review_<game>.json and are exported to the event log.
     """
     key = _key(game) if game else ""
-    port = int(os.environ.get("VB_REVIEW_PORT", "8770"))
+    port = int(os.environ.get("VB_REVIEW_PORT", "8771"))
     url = f"http://localhost:{port}/" + (f"g/{key}" if key else "")
     import socket
     with socket.socket() as s:
