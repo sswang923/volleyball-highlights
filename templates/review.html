@@ -34,6 +34,9 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 .zoom .seg { bottom: 18px; }
 .seg.ok { background: var(--ok); }
 .seg.deleted { background: repeating-linear-gradient(45deg, var(--del), var(--del) 4px, transparent 4px, transparent 8px); opacity: .7; }
+.seg.cand { background: color-mix(in srgb, var(--game) 22%, transparent); border: 2px dashed var(--game); opacity: 1; }
+.seg.cand.sel { outline: 2px solid var(--game); }
+#candCard { border-color: var(--game); }
 .seg.sel { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
 .edge-mark { position: absolute; top: 2px; bottom: 16px; width: 4px; margin-left: -2px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 35%, transparent); z-index: 3; pointer-events: none; }
 .seg.sel ~ .edge-mark.sel, .edge-mark.sel { background: var(--sel); }
@@ -107,6 +110,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <span><span class="dot" style="background:var(--ok)"></span>looks right</span>
       <span><span class="dot" style="background:var(--del)"></span>not a rally</span>
       <span><span class="dot" style="background:var(--game)"></span>game start/end</span>
+      <span><span class="dot" style="border:2px dashed var(--game)"></span>possible rally (ball seen between rallies)</span>
       <span>Signals: <b style="color:var(--ink)">—</b> rally score, <b style="color:var(--sel)">—</b> ball seen, <b style="color:var(--ok)">—</b> live/dead, dashed = cut-offs</span>
     </div>
     <div class="row">
@@ -118,6 +122,18 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <button id="speed">1×</button>
       <button id="reviewMode" title="Play each rally, pause at its end">Review mode</button>
       <button id="undo">↶ Undo</button>
+    </div>
+  </div>
+
+  <div class="panel hidden" id="candCard">
+    <div><span class="sel-title">Possible rally</span> <span class="times" id="candTimes"></span>
+      <span class="times" id="candLeft"></span></div>
+    <div class="row">
+      <button id="candPlay">▶ Play it</button>
+      <button id="candYes" class="primary">＋ It's a rally</button>
+      <button id="candNo" class="danger">✗ Not a rally</button>
+      <button id="candNext">Next possible ⏭ <kbd>C</kbd></button>
+      <button id="candClose">Close</button>
     </div>
   </div>
 
@@ -167,7 +183,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="row">
       <div class="tabs"><button id="tabList" class="on">List</button><button id="tabText">Edit as text</button></div>
       <span class="grow"></span>
-      <span id="listFilters"><button id="fAll" class="on">All</button> <button id="fTodo">To check</button></span>
+      <span id="listFilters"><button id="fAll" class="on">All</button> <button id="fTodo">To check</button> <button id="fCand">Possible</button></span>
       <span class="times" id="counts"></span>
     </div>
     <div id="listView"><div id="list"></div></div>
@@ -184,7 +200,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
       <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
-      <kbd>S</kbd> split · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
 {% endif %}
@@ -197,6 +213,7 @@ const v = document.getElementById("v");
 const $ = (id) => document.getElementById(id);
 let data = { rallies: [], game_start: null, game_end: null }, dur = 1, sel = -1;
 let undoStack = [], saveTimer = null, filter = "all", reviewMode = false, stopAt = null;
+let cands = [], candSel = null;          // possible rallies from /candidates; candSel = the one being looked at
 let dragging = null;                       // {kind: "scrub"|"edge", ...} while a pointer drag is active
 const ZOOM_LEVELS = [10, 20, 40, 80, 160, 300, 600, 1200];
 let zoomSpan = 80, zoomLo = 0;             // zoomed window [zoomLo, zoomLo + zoomSpan]
@@ -242,7 +259,8 @@ function change(fn) { snapshot(); fn(); sorted(); render(); queueSave(); }
 // ── load / save ─────────────────────────────────────────────────────────────
 async function load() {
   const r = await fetch(`/api/${GAME}/rallies`); const d = await r.json();
-  data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end };
+  data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end, dismissed: d.dismissed || [] };
+  fetch(`/api/${GAME}/candidates`).then(r => r.json()).then(c => { cands = c.candidates || []; render(); });
   dur = d.duration || 1; sorted();
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
   const first = data.rallies.findIndex(r => r.status === "auto");
@@ -368,7 +386,53 @@ function followPlayhead() {                // keep the playhead inside the zoome
 }
 
 // ── rendering ──────────────────────────────────────────────────────────────
-function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); }
+const overlap = (a, b) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
+function visibleCands() {                 // hide ones covered by a rally, dismissed, or outside the game
+  const live = data.rallies.filter(r => r.status !== "deleted");
+  const gone = (data.dismissed || []).map(([s, e]) => ({ start: s, end: e }));
+  return cands.filter(c => {
+    const len = c.end - c.start;
+    if (data.game_start != null && c.end < data.game_start) return false;
+    if (data.game_end != null && c.start > data.game_end) return false;
+    if (live.some(r => overlap(c, r) > 0.3 * len)) return false;
+    return !gone.some(g => overlap(c, g) > 0.5 * len);
+  });
+}
+function selectCand(c, seek = true) {
+  candSel = c;
+  if (c && seek) { v.currentTime = Math.max(0, c.start - 1.5); centerZoom(c.start + 3); }
+  render();
+}
+function nextCand(dir = 1) {
+  const vc = visibleCands(); if (!vc.length) { selectCand(null, false); return; }
+  const t = candSel ? candSel.start : v.currentTime - 0.01;
+  const c = dir > 0 ? vc.find(x => x.start > t) || vc[0] : [...vc].reverse().find(x => x.start < t) || vc[vc.length - 1];
+  selectCand(c);
+}
+function candYes() {
+  const c = candSel; if (!c) return;
+  const prev = [...data.rallies].reverse().find(r => r.start <= c.start && r.status !== "deleted");
+  const r = { start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, set: prev ? prev.set : 1,
+              winner: null, serve: null, status: "auto" };
+  change(() => data.rallies.push(r));
+  candSel = null; select(data.rallies.indexOf(r), false);      // now fix its edges like any rally
+}
+function candNo() {
+  const c = candSel; if (!c) return;
+  change(() => (data.dismissed = data.dismissed || []).push([c.start, c.end]));
+  nextCand(1);
+}
+
+function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); renderCand(); }
+function renderCand() {
+  const vc = visibleCands();
+  $("fCand").textContent = `Possible (${vc.length})`;
+  if (candSel && !vc.includes(candSel)) candSel = null;
+  $("candCard").classList.toggle("hidden", !candSel);
+  if (!candSel) return;
+  $("candTimes").textContent = `${fmt(candSel.start)} → ${fmt(candSel.end)} (${(candSel.end - candSel.start).toFixed(1)} s) · ball seen ${Math.round(candSel.seen * 100)}% · peak score ${candSel.peak.toFixed(2)}`;
+  $("candLeft").textContent = ` · ${vc.indexOf(candSel) + 1} of ${vc.length}`;
+}
 
 function renderOverview() {
   const tl = $("tl"); tl.innerHTML = "";
@@ -380,6 +444,10 @@ function renderOverview() {
     d.style.left = (r.start / dur * 100) + "%"; d.style.width = Math.max(0.15, (r.end - r.start) / dur * 100) + "%";
     tl.appendChild(d);
   });
+  for (const c of visibleCands()) {
+    const d = document.createElement("div"); d.className = "seg cand" + (c === candSel ? " sel" : "");
+    d.style.left = (c.start / dur * 100) + "%"; d.style.width = Math.max(0.15, (c.end - c.start) / dur * 100) + "%"; tl.appendChild(d);
+  }
   for (const t of [data.game_start, data.game_end]) if (t != null) {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = (t / dur * 100) + "%"; tl.appendChild(m); }
   const h = document.createElement("div"); h.className = "head"; h.id = "tlHead"; h.style.left = (v.currentTime / dur * 100) + "%"; tl.appendChild(h);
@@ -394,6 +462,11 @@ function renderZoom() {
   }
   for (const t of [data.game_start, data.game_end]) if (t != null && t >= lo && t <= lo + span) {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = X(t); z.appendChild(m); }
+  for (const c of visibleCands()) {
+    if (c.end < lo || c.start > lo + span) continue;
+    const d = document.createElement("div"); d.className = "seg cand" + (c === candSel ? " sel" : "");
+    d.style.left = X(c.start); d.style.width = ((c.end - c.start) / span * 100) + "%"; z.appendChild(d);
+  }
   data.rallies.forEach((r, i) => {
     if (r.end < lo || r.start > lo + span) return;
     const d = document.createElement("div");
@@ -434,6 +507,16 @@ function renderPanel() {
 
 function renderList() {
   const nums = numbering(), wins = winners(), list = $("list"); list.innerHTML = "";
+  if (filter === "cand") {
+    const vc = visibleCands();
+    if (!vc.length) list.innerHTML = '<div class="item"><span></span><span>No possible rallies left to check.</span><span></span></div>';
+    vc.forEach(c => {
+      const d = document.createElement("div"); d.className = "item" + (c === candSel ? " sel" : "");
+      d.innerHTML = `<span>possible</span><span>${fmt(c.start)} → ${fmt(c.end)} · ball seen ${Math.round(c.seen * 100)}%</span><span class="chip" style="background:var(--game);color:#fff">check</span>`;
+      d.onclick = () => selectCand(c); list.appendChild(d);
+    });
+    return;
+  }
   data.rallies.forEach((x, i) => {
     if (filter === "todo" && x.status !== "auto") return;
     const d = document.createElement("div");
@@ -541,6 +624,7 @@ $("zoom").addEventListener("pointerdown", (e) => {
   const t0 = zoomTimeAt(e, rect);
   const i = data.rallies.findIndex(r => r.start <= t0 && t0 <= r.end);
   if (i >= 0) { sel = i; renderPanel(); renderList(); }
+  else { const c = visibleCands().find(c => c.start <= t0 && t0 <= c.end); if (c) { candSel = c; renderCand(); } }
   dragging = { kind: "scrub" };
   const seek = (ev) => { v.currentTime = Math.max(0, Math.min(dur, zoomTimeAt(ev, rect))); renderZoom(); renderOverview(); };
   seek(e);
@@ -610,8 +694,15 @@ $("merge").onclick = mergeNext;
 $("add").onclick = addHere;
 $("gameStart").onclick = () => change(() => data.game_start = nowT());
 $("gameEnd").onclick = () => change(() => data.game_end = nowT());
-$("fAll").onclick = () => { filter = "all"; $("fAll").classList.add("on"); $("fTodo").classList.remove("on"); renderList(); };
-$("fTodo").onclick = () => { filter = "todo"; $("fTodo").classList.add("on"); $("fAll").classList.remove("on"); renderList(); };
+function setFilter(f) { filter = f; for (const [id, k] of [["fAll", "all"], ["fTodo", "todo"], ["fCand", "cand"]]) $(id).classList.toggle("on", f === k); renderList(); }
+$("fAll").onclick = () => setFilter("all");
+$("fTodo").onclick = () => setFilter("todo");
+$("fCand").onclick = () => { setFilter("cand"); if (!candSel) nextCand(1); };
+$("candPlay").onclick = () => { if (!candSel) return; v.currentTime = Math.max(0, candSel.start - 1); stopAt = candSel.end + 1; v.play(); };
+$("candYes").onclick = candYes;
+$("candNo").onclick = candNo;
+$("candNext").onclick = () => nextCand(1);
+$("candClose").onclick = () => selectCand(null, false);
 
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -628,6 +719,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "p" || k === "P") step(-1);
   else if (k === "a" || k === "A") addHere();
   else if (k === "s" || k === "S") splitHere();
+  else if (k === "c" || k === "C") nextCand(e.shiftKey ? -1 : 1);
   else if (k === "+" || k === "=") zoomBy(-1, v.currentTime);
   else if (k === "-" || k === "_") zoomBy(1, v.currentTime);
 });

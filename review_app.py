@@ -208,8 +208,10 @@ def api_rallies(key):
                       "serve": r.get("serve") if r.get("serve") in ("home", "away") else None,
                       "status": r.get("status") if r.get("status") in ("auto", "ok", "deleted") else "auto"})
     clean.sort(key=lambda r: r["start"])
+    dismissed = [[round(float(a), 2), round(float(b), 2)] for a, b in d.get("dismissed", []) if float(b) > float(a)]
     out = {"game": key, "saved_at": datetime.now().isoformat(timespec="seconds"),
-           "game_start": d.get("game_start"), "game_end": d.get("game_end"), "rallies": clean}
+           "game_start": d.get("game_start"), "game_end": d.get("game_end"), "rallies": clean,
+           "dismissed": dismissed}
     (LABELS / key).mkdir(parents=True, exist_ok=True)
     export_event_log(key, out)
     rv = LABELS / key / f"review_{key}.json"
@@ -221,6 +223,47 @@ def api_rallies(key):
     return jsonify({"ok": True, "saved_at": out["saved_at"],
                     "rallies": sum(r["status"] != "deleted" for r in clean),
                     "reviewed": sum(r["status"] == "ok" for r in clean)})
+
+
+@app.route("/api/<key>/candidates")
+def api_candidates(key):
+    """Possible rallies: stretches where the ball was seen or the rally score came near the cut-off.
+
+    Returned for the whole game; the page hides those overlapping a rally or dismissed by the user.
+    """
+    check_key(key)
+    p = WORK / key / "signals.npz"
+    if not p.exists():
+        return jsonify({"available": False, "candidates": []})
+    import numpy as np
+    s = np.load(p)
+    bins, fused = s["bins"], s["fused"]
+    seen = s["ball_seen"] if "ball_seen" in s.files else np.zeros_like(fused)
+    lo = np.full(len(bins), 0.3, np.float32)                 # stop cut-off of the set each bin is in
+    for (a, b), h in zip(s["spans"].tolist(), s["thresholds"].tolist()):
+        lo[(bins >= a - 5) & (bins <= b + 5)] = 0.6 * h
+    hot = (seen >= 0.5) | (fused >= lo)
+    runs, start = [], None
+    for i, h in enumerate(hot):
+        if h and start is None:
+            start = i
+        elif not h and start is not None:
+            runs.append([start, i]); start = None
+    if start is not None:
+        runs.append([start, len(hot)])
+    merged = []
+    for a, b in runs:                                        # join flickers less than 2 s apart
+        if merged and (a - merged[-1][1]) * 0.5 <= 2.0:
+            merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    out = []
+    for a, b in merged:
+        if (b - a) * 0.5 < 2.0:
+            continue
+        out.append({"start": round(float(bins[a]), 1), "end": round(float(bins[min(b, len(bins) - 1)]), 1),
+                    "seen": round(float(seen[a:b].mean()), 2), "peak": round(float(fused[a:b].max()), 2)})
+    return jsonify({"available": True, "candidates": out})
 
 
 @app.route("/api/<key>/text")
