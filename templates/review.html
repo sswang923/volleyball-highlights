@@ -46,7 +46,18 @@ a { color: var(--sel); }
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 header h1 { font-size: 18px; margin: 0; }
 #saveState { margin-left: auto; font-size: 13px; color: var(--muted); }
-video { width: 100%; max-height: 42vh; background: #000; border-radius: 8px; display: block; }
+.vwrap { position: relative; overflow: hidden; background: #000; border-radius: 8px; height: var(--vh, 52vh);
+         touch-action: none; cursor: pointer; user-select: none; }
+.vwrap.zoomed { cursor: grab; }
+.vwrap.panning { cursor: grabbing; }
+.vwrap video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; display: block; }
+.vtools { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; align-items: center; z-index: 2;
+          background: rgba(0,0,0,.45); padding: 3px 5px; border-radius: 8px; color: #fff; font-size: 12px; }
+.vtools button { min-height: 26px; padding: 1px 8px; font-size: 12px; background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.25); }
+.vtools button.on { outline: 2px solid #fff; }
+.vtime { position: absolute; left: 8px; bottom: 6px; z-index: 2; background: rgba(0,0,0,.55); color: #fff; padding: 2px 8px;
+         border-radius: 6px; font: 13px ui-monospace, Consolas, monospace; pointer-events: none; }
+.vhint { position: absolute; left: 8px; top: 6px; z-index: 2; color: rgba(255,255,255,.75); font-size: 11px; pointer-events: none; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
 .bar-label { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; margin: 2px 0 3px; }
 .bar-label .grow { flex: 1; }
@@ -116,7 +127,18 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
   </header>
 <div class="layout"><div class="main">
 
-  <video id="v" src="/video/{{ game }}" preload="metadata" controls playsinline></video>
+  <div class="vwrap" id="vwrap">
+    <video id="v" src="/video/{{ game }}" preload="auto" playsinline></video>
+    <div class="vhint hide-sm">click = play/pause · wheel = zoom · drag = move</div>
+    <div class="vtools">
+      <button id="vzOut" title="Zoom out">−</button><span id="vzLabel">1×</span><button id="vzIn" title="Zoom in (or mouse wheel over the video)">＋</button>
+      <button id="vzFit" title="Show the whole frame">Fit</button>
+      <span style="width:6px"></span>
+      <button data-vsize="s" title="Small video">S</button><button data-vsize="m" title="Medium video">M</button><button data-vsize="l" title="Large video">L</button>
+      <button id="vMute" title="Sound on/off">🔊</button>
+    </div>
+    <div class="vtime" id="vtime">0:00.0</div>
+  </div>
 
   <div class="panel">
     <div class="bar-label"><span>Whole game — click or drag to move; blue box = zoomed area</span></div>
@@ -307,6 +329,82 @@ function change(fn) {
   if (now > hidden) flash(`${now - hidden} rall${now - hidden === 1 ? "y" : "ies"} outside the game removed.`);
   else if (now < hidden) flash(`${hidden - now} rall${hidden - now === 1 ? "y" : "ies"} back inside the game restored.`);
 }
+
+// ── seeking that keeps up with a drag: only one seek in flight, the newest position wins ──
+let seekBusy = false, seekNext = null, shownT = 0;
+function seekTo(t) {
+  t = Math.max(0, Math.min(dur, t)); shownT = t;
+  $("vtime").textContent = fmt(t);
+  if (seekBusy) { seekNext = t; return; }
+  seekBusy = true; v.currentTime = t;
+}
+v.addEventListener("seeked", () => {
+  seekBusy = false;
+  if (seekNext != null) { const t = seekNext; seekNext = null; seekTo(t); }
+});
+
+// ── video zoom / pan (wheel zooms at the pointer, drag moves, click plays/pauses) ──
+const VZ_KEY = `review.view.${GAME}`, VS_KEY = "review.vsize";
+let vz = { z: 1, x: 0, y: 0 };               // x, y = top-left offset as a fraction of the frame
+function loadView() {
+  try { const sv = JSON.parse(localStorage.getItem(VZ_KEY) || "null"); if (sv && sv.z >= 1) vz = sv; } catch (e) {}
+  let size = "m"; try { size = localStorage.getItem(VS_KEY) || "m"; } catch (e) {}
+  setVSize(size, false);
+}
+function saveView() { try { localStorage.setItem(VZ_KEY, JSON.stringify(vz)); } catch (e) {} }
+function clampView() {
+  vz.z = Math.max(1, Math.min(6, vz.z));
+  vz.x = Math.min(0, Math.max(1 - vz.z, vz.x)); vz.y = Math.min(0, Math.max(1 - vz.z, vz.y));
+}
+function applyView() {
+  clampView();
+  const w = $("vwrap").clientWidth, h = $("vwrap").clientHeight;
+  v.style.transform = `translate(${vz.x * w}px, ${vz.y * h}px) scale(${vz.z})`;
+  $("vzLabel").textContent = (Math.round(vz.z * 10) / 10) + "×";
+  $("vwrap").classList.toggle("zoomed", vz.z > 1.01);
+}
+function zoomVideo(factor, fx = 0.5, fy = 0.5) {   // fx, fy = pointer position as a fraction of the frame
+  const z2 = Math.max(1, Math.min(6, vz.z * factor));
+  vz.x = fx - (fx - vz.x) * z2 / vz.z; vz.y = fy - (fy - vz.y) * z2 / vz.z; vz.z = z2;
+  applyView(); saveView();
+}
+function setVSize(size, save = true) {
+  const h = { s: "36vh", m: "52vh", l: "70vh" }[size] || "52vh";
+  $("vwrap").style.setProperty("--vh", h);
+  document.querySelectorAll("[data-vsize]").forEach(b => b.classList.toggle("on", b.dataset.vsize === size));
+  if (save) try { localStorage.setItem(VS_KEY, size); } catch (e) {}
+  requestAnimationFrame(() => { applyView(); renderZoom(); });
+}
+$("vwrap").addEventListener("wheel", (e) => {
+  if (e.target.closest(".vtools")) return;
+  e.preventDefault();
+  const r = $("vwrap").getBoundingClientRect();
+  zoomVideo(e.deltaY < 0 ? 1.15 : 1 / 1.15, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+}, { passive: false });
+$("vwrap").addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".vtools")) return;
+  const r = $("vwrap").getBoundingClientRect(), x0 = e.clientX, y0 = e.clientY, start = { ...vz };
+  let moved = false;
+  const move = (ev) => {
+    const dx = (ev.clientX - x0) / r.width, dy = (ev.clientY - y0) / r.height;
+    if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) > 4) moved = true;
+    if (moved && vz.z > 1.01) { $("vwrap").classList.add("panning"); vz.x = start.x + dx; vz.y = start.y + dy; applyView(); }
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up);
+    $("vwrap").classList.remove("panning");
+    if (moved) saveView(); else (v.paused ? v.play() : v.pause());
+  };
+  window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+});
+$("vwrap").addEventListener("dblclick", (e) => { if (!e.target.closest(".vtools")) { vz = { z: 1, x: 0, y: 0 }; applyView(); saveView(); } });
+$("vzIn").onclick = () => zoomVideo(1.25);
+$("vzOut").onclick = () => zoomVideo(1 / 1.25);
+$("vzFit").onclick = () => { vz = { z: 1, x: 0, y: 0 }; applyView(); saveView(); };
+document.querySelectorAll("[data-vsize]").forEach(b => b.onclick = () => setVSize(b.dataset.vsize));
+$("vMute").onclick = () => { v.muted = !v.muted; $("vMute").textContent = v.muted ? "🔇" : "🔊"; };
+window.addEventListener("resize", applyView);
+loadView();
 
 // ── load / save ─────────────────────────────────────────────────────────────
 async function load() {
@@ -735,7 +833,7 @@ $("tl").addEventListener("pointerdown", (e) => {
   const rect = $("tl").getBoundingClientRect();
   const tAt = (ev) => Math.max(0, Math.min(dur, (ev.clientX - rect.left) / rect.width * dur));
   dragging = { kind: "scrub" };
-  const seek = (ev) => { const t = tAt(ev); v.currentTime = t; centerZoom(t); renderOverview(); renderZoom(); };
+  const seek = (ev) => { const t = tAt(ev); seekTo(t); centerZoom(t); renderOverview(); renderZoom(); };
   seek(e);
   const i = data.rallies.findIndex(r => r.start - 2 <= v.currentTime && v.currentTime <= r.end + 2);
   if (i >= 0) { sel = i; renderPanel(); renderList(); }
@@ -772,7 +870,7 @@ $("zoom").addEventListener("pointerdown", (e) => {
       const nb = neighbours(r);                          // can't drag into the next/previous rally
       if (hit.edge === "start" && nb.prev) t = Math.max(t, Math.round((nb.prev.end + 0.1) * 10) / 10);
       if (hit.edge === "end" && nb.next) t = Math.min(t, Math.round((nb.next.start - 0.1) * 10) / 10);
-      r[hit.edge] = t; v.currentTime = t;            // freeze on the frame under the edge
+      r[hit.edge] = t; seekTo(t);                    // freeze on the frame under the edge
       renderZoom(); renderPanel();
     };
     move(e);
@@ -790,7 +888,7 @@ $("zoom").addEventListener("pointerdown", (e) => {
   if (i >= 0) { sel = i; candSel = null; render(); }
   else { const c = visibleCands().find(c => c.start <= t0 && t0 <= c.end); if (c) { candSel = c; render(); } }
   dragging = { kind: "scrub" };
-  const seek = (ev) => { v.currentTime = Math.max(0, Math.min(dur, zoomTimeAt(ev, rect))); renderZoom(); renderOverview(); };
+  const seek = (ev) => { seekTo(zoomTimeAt(ev, rect)); renderZoom(); renderOverview(); };
   seek(e);
   const up = () => { dragging = null; window.removeEventListener("pointermove", seek); window.removeEventListener("pointerup", up); render(); };
   window.addEventListener("pointermove", seek); window.addEventListener("pointerup", up);
@@ -811,6 +909,7 @@ $("zoomIn").onclick = () => zoomBy(-1, v.currentTime);
 $("zoomOut").onclick = () => zoomBy(1, v.currentTime);
 
 v.addEventListener("timeupdate", () => {
+  if (!seekBusy) $("vtime").textContent = fmt(v.currentTime);
   if (dragging) return;
   const h = $("tlHead"); if (h) h.style.left = (v.currentTime / dur * 100) + "%";
   followPlayhead(); renderZoom();

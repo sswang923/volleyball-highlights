@@ -44,8 +44,11 @@ def check_key(key):
 
 
 def video_path(key):
-    proxy = WORK / key / "proxy.mp4"
-    return proxy if proxy.exists() else VIDEO_DIR / f"stitched_{key}.mp4"
+    """Scrub-friendly copy (keyframe every 0.5 s) if made, else the 720p working copy, else the stitched video."""
+    for p in (WORK / key / "proxy_scrub.mp4", WORK / key / "proxy.mp4"):
+        if p.exists():
+            return p
+    return VIDEO_DIR / f"stitched_{key}.mp4"
 
 
 def duration(p: Path) -> float:
