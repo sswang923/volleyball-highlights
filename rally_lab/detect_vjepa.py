@@ -35,6 +35,28 @@ def norm(F):
     return (F - F.mean(0)) / (F.std(0) + 1e-6)
 
 
+MAX_SET_RALLIES, MIN_BREAK_S = 55, 45.0
+
+
+def split_long_sets(spans, segs):
+    """A 'set' with more rallies than a real set can hold is two sets whose break was too short for
+    the 150 s rule (game 4: sets 2 and 3, 76 s apart). Split it at its longest quiet gap."""
+    out = []
+    for a, b in spans:
+        rs = sorted(s for s in segs if a - 5 <= s[0] <= b + 5)
+        while len(rs) > MAX_SET_RALLIES:
+            gaps = [(rs[i + 1][0] - rs[i][1], i) for i in range(10, len(rs) - 10)]   # keep >= 10 rallies a side
+            if not gaps:
+                break
+            gap, i = max(gaps)
+            if gap < MIN_BREAK_S:
+                break
+            out.append([a, rs[i][1]])
+            a, rs = rs[i + 1][0], rs[i + 1:]
+        out.append([a, b])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True)
@@ -66,6 +88,7 @@ def main():
         else:
             s_ = sg.segment(prob[m], bins[m], **SEG)
         segs += [[x - 0.5, y + 1.0] for x, y in s_]
+    spans = split_long_sets(spans, segs)
     ball = sg.load_ball_csv(g.ball_csv, pl.FPS)
     rallies = sg.score_rallies(segs, spans, ball)
 

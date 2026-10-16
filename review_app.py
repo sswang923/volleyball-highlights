@@ -129,12 +129,17 @@ def load_review(key):
     for name in (f"auto_events_{key}.json", f"event_log_{key}.json"):
         p = lab / name
         if p.exists():
-            rallies, gs, ge = rallies_from_events(json.load(open(p)).get("events", []))
+            events = json.load(open(p)).get("events", [])
+            rallies, gs, ge = rallies_from_events(events)
             # auto point winners are unreliable — start the review without them
             if name.startswith("auto_"):
                 for r in rallies:
                     r["winner"] = None
-            return {"game": key, "game_start": gs, "game_end": ge, "rallies": rallies, "source": name}
+            # pre-fill set marks from the detector's set_start / set_end events
+            ends = {e.get("set"): e["t_s"] for e in events if e.get("event") == "set_end"}
+            sets = [{"start": e["t_s"], "end": ends.get(e.get("set"))}
+                    for e in sorted((e for e in events if e.get("event") == "set_start"), key=lambda e: e["t_s"])]
+            return {"game": key, "game_start": gs, "game_end": ge, "rallies": rallies, "sets": sets, "source": name}
     return {"game": key, "game_start": None, "game_end": None, "rallies": [], "source": None}
 
 
