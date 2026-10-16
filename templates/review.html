@@ -591,8 +591,8 @@ function candYes() {
 }
 function candNo() {
   const c = findCand(candSel); if (!c) return;
+  candSel = null;                         // stay where the video is — no jump to the next one
   change(() => (data.dismissed = data.dismissed || []).push([c.start, c.end]));
-  nextCand(1);
 }
 
 function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); renderCand(); renderActions(); }
@@ -931,7 +931,10 @@ function setEdge(edge, t) { const r = cur(); if (!r) return;
   if (Math.abs(r[edge] - t) > 0.05) flash(`Stopped at ${fmt(r[edge])} — rallies can't overlap.`);
   sel = data.rallies.indexOf(r); render(); }
 function markOk() { const r = cur(); if (!r) return; change(() => r.status = "ok"); sel = data.rallies.indexOf(r); step(1); }
-function markDel() { const r = cur(); if (!r) return; change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); step(1); }
+function markDel() {                     // remove / restore in place — the video keeps playing where it is
+  const r = cur(); if (!r) return;
+  change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); render();
+}
 function neighbours(r) {                 // closest live rallies before / after r (excluding r)
   const live = data.rallies.filter(x => x !== r && x.status !== "deleted");
   return { prev: [...live].reverse().find(x => x.start < r.start) || null, next: live.find(x => x.start >= r.start) || null };
