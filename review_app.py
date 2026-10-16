@@ -266,6 +266,41 @@ def api_candidates(key):
     return jsonify({"available": True, "candidates": out})
 
 
+@app.route("/api/<key>/suggest_end")
+def api_suggest_end(key):
+    """Guess where a rally that starts at `start` ends: the first moment play goes quiet.
+
+    Quiet = the ball isn't moving (ball activity < 0.15) and the rally score is under the
+    stop cut-off, for 1.5 s in a row. Never runs past `limit` (the next rally) or 60 s.
+    """
+    check_key(key)
+    start = float(request.args.get("start", 0))
+    limit = float(request.args.get("limit", start + 60))
+    p = WORK / key / "signals.npz"
+    if not p.exists():
+        return jsonify({"end": round(min(start + 8, limit), 1), "how": "no signals - default 8 s"})
+    import numpy as np
+    s = np.load(p)
+    bins, fused = s["bins"], s["fused"]
+    act = s["ball_act"] if "ball_act" in s.files else fused
+    lo = 0.3
+    for (a, b), h in zip(s["spans"].tolist(), s["thresholds"].tolist()):
+        if a - 5 <= start <= b + 5:
+            lo = 0.6 * h
+    stop = min(limit, start + 60)
+    m = (bins >= start + 2) & (bins <= stop)
+    idx = np.where(m)[0]
+    quiet_run, need = 0, int(1.5 / 0.5)
+    for i in idx:
+        quiet = act[i] < 0.15 and fused[i] < lo
+        quiet_run = quiet_run + 1 if quiet else 0
+        if quiet_run >= need:
+            end = float(bins[i - need + 1]) + 1.0            # a little after the ball went dead
+            return jsonify({"end": round(min(end, limit - 0.2), 1), "how": "ball stopped moving"})
+    return jsonify({"end": round(max(start + 1, min(start + 8, limit - 0.2)), 1),
+                    "how": "no clear stop found - 8 s placeholder, check it"})
+
+
 @app.route("/api/<key>/text")
 def api_text(key):
     """The rally list as text (labels/<key>/rallies_<key>.txt), for editing outside the app."""

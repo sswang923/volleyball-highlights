@@ -22,7 +22,7 @@ a { color: var(--sel); }
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 header h1 { font-size: 18px; margin: 0; }
 #saveState { margin-left: auto; font-size: 13px; color: var(--muted); }
-video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; display: block; }
+video { width: 100%; max-height: 42vh; background: #000; border-radius: 8px; display: block; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }
 .bar-label { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; margin: 2px 0 3px; }
 .bar-label .grow { flex: 1; }
@@ -36,6 +36,10 @@ video { width: 100%; max-height: 58vh; background: #000; border-radius: 8px; dis
 .seg.deleted { background: repeating-linear-gradient(45deg, var(--del), var(--del) 4px, transparent 4px, transparent 8px); opacity: .7; }
 .seg.cand { background: color-mix(in srgb, var(--game) 22%, transparent); border: 2px dashed var(--game); opacity: 1; }
 .seg.cand.sel { outline: 2px solid var(--game); }
+.actions { position: sticky; bottom: 0; z-index: 10; background: var(--panel); padding: 6px 0 2px; border-top: 1px solid var(--line); margin-top: 6px; }
+.actions .what { font-weight: 600; min-width: 220px; }
+.actions .what.cand { color: var(--game); }
+#flash { color: var(--err); font-size: 13px; }
 #candCard { border-color: var(--game); }
 .seg.sel { outline: 2px solid var(--sel); outline-offset: 1px; z-index: 2; }
 .edge-mark { position: absolute; top: 2px; bottom: 16px; width: 4px; margin-left: -2px; border-radius: 2px; background: color-mix(in srgb, var(--ink) 35%, transparent); z-index: 3; pointer-events: none; }
@@ -55,7 +59,7 @@ button.on { outline: 2px solid var(--sel); }
 .times { font-variant-numeric: tabular-nums; color: var(--muted); }
 .legend { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-#list { max-height: 320px; overflow: auto; margin-top: 6px; }
+#list { max-height: 320px; overflow: auto; margin-top: 6px; position: relative; }
 .item { display: grid; grid-template-columns: 92px 1fr auto; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; font-variant-numeric: tabular-nums; }
 .item.sel { background: color-mix(in srgb, var(--sel) 14%, transparent); }
 .item.deleted { opacity: .5; text-decoration: line-through; }
@@ -97,7 +101,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="bar-label"><span>Whole game — click or drag to move; blue box = zoomed area</span></div>
     <div class="timeline" id="tl"></div>
     <div class="bar-label" style="margin-top:8px">
-      <span>Zoomed — click/drag to move · grab a rally's edge to change its start or end</span>
+      <span>Zoomed — click/drag to move · grab a rally's edge to change start/end · double-click an empty spot to add a rally</span>
       <span class="grow"></span>
       <button class="small" id="zoomOut" title="Zoom out (or mouse wheel)">−</button>
       <span id="zoomLabel" class="times">80 s</span>
@@ -105,12 +109,26 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     </div>
     <div class="zoom" id="zoom"></div>
     <canvas id="sig" height="60" style="width:100%;height:60px;display:block;margin-top:4px"></canvas>
+    <div class="row actions" id="actions">
+      <span class="what" id="actWhat">Nothing selected</span>
+      <button id="actPlay">▶ Play</button>
+      <button id="actAdd" class="primary" title="New rally starting at the playhead; end is guessed from the signals (A)">＋ Add rally here</button>
+      <button id="actMake" class="primary hidden" title="Turn this possible rally into a rally">＋ Make it a rally</button>
+      <button id="actRemove" class="danger" title="Remove the selected rally or possible rally (Delete)">✗ Remove</button>
+      <button id="actOk" title="Mark the selected rally as checked (Enter)">✓ Looks right</button>
+      <button id="actStart" title="Selected rally starts at the playhead ([)">⇤ Start = now</button>
+      <button id="actEnd" title="Selected rally ends at the playhead (])">⇥ End = now</button>
+      <button id="actAutoEnd" title="Guess the end from the signals">⇥ Auto end</button>
+      <button id="actNextCand" title="Next possible rally (C)">Next possible ⏭</button>
+      <span id="flash"></span>
+    </div>
     <div class="legend" id="sigLegend">
       <span><span class="dot" style="background:var(--auto)"></span>to check</span>
       <span><span class="dot" style="background:var(--ok)"></span>looks right</span>
       <span><span class="dot" style="background:var(--del)"></span>not a rally</span>
       <span><span class="dot" style="background:var(--game)"></span>game start/end</span>
       <span><span class="dot" style="border:2px dashed var(--game)"></span>possible rally (ball seen between rallies)</span>
+      <span><span class="dot" style="background:color-mix(in srgb, var(--ok) 55%, transparent)"></span>in play (rally score over the start cut-off)</span>
       <span>Signals: <b style="color:var(--ink)">—</b> rally score, <b style="color:var(--sel)">—</b> ball seen, <b style="color:var(--ok)">—</b> live/dead, dashed = cut-offs</span>
     </div>
     <div class="row">
@@ -122,18 +140,6 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
       <button id="speed">1×</button>
       <button id="reviewMode" title="Play each rally, pause at its end">Review mode</button>
       <button id="undo">↶ Undo</button>
-    </div>
-  </div>
-
-  <div class="panel hidden" id="candCard">
-    <div><span class="sel-title">Possible rally</span> <span class="times" id="candTimes"></span>
-      <span class="times" id="candLeft"></span></div>
-    <div class="row">
-      <button id="candPlay">▶ Play it</button>
-      <button id="candYes" class="primary">＋ It's a rally</button>
-      <button id="candNo" class="danger">✗ Not a rally</button>
-      <button id="candNext">Next possible ⏭ <kbd>C</kbd></button>
-      <button id="candClose">Close</button>
     </div>
   </div>
 
@@ -200,7 +206,7 @@ kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-si
     <div class="help hide-sm">
       Keys: <kbd>Space</kbd> play · <kbd>←</kbd>/<kbd>→</kbd> ±2 s (<kbd>Shift</kbd> ±0.2) · <kbd>[</kbd>/<kbd>]</kbd> start/end = now ·
       <kbd>Enter</kbd> looks right + next · <kbd>Del</kbd> not a rally · <kbd>N</kbd>/<kbd>P</kbd> next/prev · <kbd>A</kbd> add ·
-      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
+      <kbd>S</kbd> split · <kbd>C</kbd> next possible rally · <kbd>Del</kbd> removes the selected rally or possible rally · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo. Saves automatically.
     </div>
   </div>
 {% endif %}
@@ -327,6 +333,9 @@ function fromText(txt) {
       out.rallies.push(r);
     } else errs.push(ln + `can't read "${line}"`);
   });
+  const live = out.rallies.filter(r => r.status !== "deleted").sort((a, b) => a.start - b.start);
+  for (let i = 1; i < live.length; i++) if (live[i].start < live[i - 1].end)
+    errs.push(`rallies overlap: ${fmt(live[i - 1].start)}–${fmt(live[i - 1].end)} and ${fmt(live[i].start)}–${fmt(live[i].end)}`);
   return { out, errs };
 }
 let textDirty = false;
@@ -354,11 +363,15 @@ $("tabText").onclick = () => { $("tabText").classList.add("on"); $("tabList").cl
 
 // ── selection / playback ───────────────────────────────────────────────────
 function select(i, seek) {
+  candSel = null;
   if (!data.rallies.length) { sel = -1; render(); return; }
   sel = Math.max(0, Math.min(i, data.rallies.length - 1));
   if (seek) { v.currentTime = Math.max(0, data.rallies[sel].start - 1.5); centerZoom(data.rallies[sel].start + 3); }
   render();
-  const el = document.querySelector(`.item[data-i="${sel}"]`); if (el) el.scrollIntoView({ block: "nearest" });
+  // keep the selected row visible inside the list only — never scroll the page away from the controls
+  const el = document.querySelector(`.item[data-i="${sel}"]`), list = $("list");
+  if (el && (el.offsetTop < list.scrollTop || el.offsetTop + el.offsetHeight > list.scrollTop + list.clientHeight))
+    list.scrollTop = el.offsetTop - list.clientHeight / 3;
 }
 const cur = () => data.rallies[sel];
 function step(dir) {
@@ -387,22 +400,37 @@ function followPlayhead() {                // keep the playhead inside the zoome
 
 // ── rendering ──────────────────────────────────────────────────────────────
 const overlap = (a, b) => Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start));
-function visibleCands() {                 // hide ones covered by a rally, dismissed, or outside the game
-  const live = data.rallies.filter(r => r.status !== "deleted");
-  const gone = (data.dismissed || []).map(([s, e]) => ({ start: s, end: e }));
-  return cands.filter(c => {
-    const len = c.end - c.start;
-    if (data.game_start != null && c.end < data.game_start) return false;
-    if (data.game_end != null && c.start > data.game_end) return false;
-    if (live.some(r => overlap(c, r) > 0.3 * len)) return false;
-    return !gone.some(g => overlap(c, g) > 0.5 * len);
-  });
+// Possible rallies are cut to the gaps between rallies (and dismissed stretches), so they never
+// contain or overlap a rally. Pieces under 3 s (6 s when touching a rally) are dropped. Memoised per edit.
+let candMemo = { key: null, list: [] };
+function visibleCands() {
+  const key = JSON.stringify([data.rallies, data.dismissed, data.game_start, data.game_end, cands.length]);
+  if (candMemo.key === key) return candMemo.list;
+  const blocks = data.rallies.filter(r => r.status !== "deleted").map(r => [r.start, r.end])
+    .concat((data.dismissed || []).map(([a, b]) => [a, b])).sort((x, y) => x[0] - y[0]);
+  const out = [];
+  for (const c of cands) {
+    let pieces = [[Math.max(c.start, data.game_start ?? 0), Math.min(c.end, data.game_end ?? Infinity)]];
+    for (const [a, b] of blocks) {
+      pieces = pieces.flatMap(([s, e]) => (b <= s || a >= e) ? [[s, e]] : [[s, Math.min(e, a - 0.2)], [Math.max(s, b + 0.2), e]]);
+    }
+    for (const [s, e] of pieces) {
+      // a short scrap right next to a rally is usually the serve toss or the ball going back: skip it
+      const touching = blocks.some(([a, b]) => Math.max(a - e, s - b) <= 1.0);
+      if (e - s >= 3 && (!touching || e - s >= 6))
+        out.push({ start: s, end: e, seen: c.seen, peak: c.peak, id: `${s.toFixed(1)}-${e.toFixed(1)}` });
+    }
+  }
+  candMemo = { key, list: out };
+  return out;
 }
+const sameCand = (a, b) => a && b && a.id === b.id;
 function selectCand(c, seek = true) {
   candSel = c;
   if (c && seek) { v.currentTime = Math.max(0, c.start - 1.5); centerZoom(c.start + 3); }
   render();
 }
+function findCand(c) { return c ? visibleCands().find(x => sameCand(x, c)) || null : null; }
 function nextCand(dir = 1) {
   const vc = visibleCands(); if (!vc.length) { selectCand(null, false); return; }
   const t = candSel ? candSel.start : v.currentTime - 0.01;
@@ -410,29 +438,42 @@ function nextCand(dir = 1) {
   selectCand(c);
 }
 function candYes() {
-  const c = candSel; if (!c) return;
+  const c = findCand(candSel); if (!c) return;
   const prev = [...data.rallies].reverse().find(r => r.start <= c.start && r.status !== "deleted");
   const r = { start: Math.round(c.start * 10) / 10, end: Math.round(c.end * 10) / 10, set: prev ? prev.set : 1,
-              winner: null, serve: null, status: "auto" };
+              winner: null, serve: null, status: "ok" };
   change(() => data.rallies.push(r));
   candSel = null; select(data.rallies.indexOf(r), false);      // now fix its edges like any rally
 }
 function candNo() {
-  const c = candSel; if (!c) return;
+  const c = findCand(candSel); if (!c) return;
   change(() => (data.dismissed = data.dismissed || []).push([c.start, c.end]));
   nextCand(1);
 }
 
-function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); renderCand(); }
+function render() { renderOverview(); renderZoom(); renderPanel(); renderList(); renderCand(); renderActions(); }
 function renderCand() {
   const vc = visibleCands();
   $("fCand").textContent = `Possible (${vc.length})`;
-  if (candSel && !vc.includes(candSel)) candSel = null;
-  $("candCard").classList.toggle("hidden", !candSel);
-  if (!candSel) return;
-  $("candTimes").textContent = `${fmt(candSel.start)} → ${fmt(candSel.end)} (${(candSel.end - candSel.start).toFixed(1)} s) · ball seen ${Math.round(candSel.seen * 100)}% · peak score ${candSel.peak.toFixed(2)}`;
-  $("candLeft").textContent = ` · ${vc.indexOf(candSel) + 1} of ${vc.length}`;
+  candSel = findCand(candSel);
+  renderActions();
 }
+function renderActions() {
+  const c = candSel, r = cur(), nums = numbering(), w = $("actWhat");
+  w.classList.toggle("cand", !!c);
+  if (c) {
+    const vc = visibleCands();
+    w.textContent = `Possible rally ${fmt(c.start)} → ${fmt(c.end)} · ball seen ${Math.round(c.seen * 100)}% · ${vc.findIndex(x => sameCand(x, c)) + 1} of ${vc.length}`;
+  } else if (r) {
+    w.textContent = `Set ${r.set} · Rally ${nums.get(r) || "—"}  ${fmt(r.start)} → ${fmt(r.end)}` + (r.status === "ok" ? " ✓" : r.status === "deleted" ? " (removed)" : "");
+  } else w.textContent = "Nothing selected";
+  $("actMake").classList.toggle("hidden", !c);
+  $("actAdd").classList.toggle("hidden", !!c);
+  for (const id of ["actOk", "actStart", "actEnd", "actAutoEnd"]) $(id).disabled = !!c || !r;
+  $("actRemove").textContent = r && !c && r.status === "deleted" ? "↺ Restore" : "✗ Remove";
+}
+let flashTimer = null;
+function flash(msg) { $("flash").textContent = msg; clearTimeout(flashTimer); flashTimer = setTimeout(() => $("flash").textContent = "", 4000); }
 
 function renderOverview() {
   const tl = $("tl"); tl.innerHTML = "";
@@ -445,7 +486,7 @@ function renderOverview() {
     tl.appendChild(d);
   });
   for (const c of visibleCands()) {
-    const d = document.createElement("div"); d.className = "seg cand" + (c === candSel ? " sel" : "");
+    const d = document.createElement("div"); d.className = "seg cand" + (sameCand(c, candSel) ? " sel" : "");
     d.style.left = (c.start / dur * 100) + "%"; d.style.width = Math.max(0.15, (c.end - c.start) / dur * 100) + "%"; tl.appendChild(d);
   }
   for (const t of [data.game_start, data.game_end]) if (t != null) {
@@ -464,7 +505,7 @@ function renderZoom() {
     const m = document.createElement("div"); m.className = "mark"; m.style.left = X(t); z.appendChild(m); }
   for (const c of visibleCands()) {
     if (c.end < lo || c.start > lo + span) continue;
-    const d = document.createElement("div"); d.className = "seg cand" + (c === candSel ? " sel" : "");
+    const d = document.createElement("div"); d.className = "seg cand" + (sameCand(c, candSel) ? " sel" : "");
     d.style.left = X(c.start); d.style.width = ((c.end - c.start) / span * 100) + "%"; z.appendChild(d);
   }
   data.rallies.forEach((r, i) => {
@@ -511,7 +552,7 @@ function renderList() {
     const vc = visibleCands();
     if (!vc.length) list.innerHTML = '<div class="item"><span></span><span>No possible rallies left to check.</span><span></span></div>';
     vc.forEach(c => {
-      const d = document.createElement("div"); d.className = "item" + (c === candSel ? " sel" : "");
+      const d = document.createElement("div"); d.className = "item" + (sameCand(c, candSel) ? " sel" : "");
       d.innerHTML = `<span>possible</span><span>${fmt(c.start)} → ${fmt(c.end)} · ball seen ${Math.round(c.seen * 100)}%</span><span class="chip" style="background:var(--game);color:#fff">check</span>`;
       d.onclick = () => selectCand(c); list.appendChild(d);
     });
@@ -556,6 +597,12 @@ async function renderSignals() {
       started ? ctx.lineTo(x, y) : ctx.moveTo(x, y); started = true; });
     ctx.stroke();
   };
+  if (sigCache.fused) {                     // in-play band: rally score above the start cut-off
+    ctx.fillStyle = "color-mix(in srgb, " + css.getPropertyValue("--ok").trim() + " 30%, transparent)";
+    const step = W / (zoomSpan / 0.5);
+    sigCache.t.forEach((t, i) => { if (t < lo - 1 || t > hi + 1) return;
+      if (sigCache.fused[i] >= sigCache.hi) ctx.fillRect(X(t) - step / 2, 0, step + 1, H); });
+  }
   for (const [p, d] of [[sigCache.hi, [6, 4]], [sigCache.lo, [2, 4]]]) {
     ctx.beginPath(); ctx.setLineDash(d); ctx.strokeStyle = css.getPropertyValue("--muted"); ctx.lineWidth = devicePixelRatio;
     ctx.moveTo(0, Y(p)); ctx.lineTo(W, Y(p)); ctx.stroke();
@@ -608,6 +655,9 @@ $("zoom").addEventListener("pointerdown", (e) => {
     const move = (ev) => {
       let t = Math.round(zoomTimeAt(ev, rect) * 10) / 10;
       t = hit.edge === "start" ? Math.max(0, Math.min(t, r.end - 0.5)) : Math.min(dur, Math.max(t, r.start + 0.5));
+      const nb = neighbours(r);                          // can't drag into the next/previous rally
+      if (hit.edge === "start" && nb.prev) t = Math.max(t, Math.round((nb.prev.end + 0.1) * 10) / 10);
+      if (hit.edge === "end" && nb.next) t = Math.min(t, Math.round((nb.next.start - 0.1) * 10) / 10);
       r[hit.edge] = t; v.currentTime = t;            // freeze on the frame under the edge
       renderZoom(); renderPanel();
     };
@@ -623,13 +673,17 @@ $("zoom").addEventListener("pointerdown", (e) => {
   }
   const t0 = zoomTimeAt(e, rect);
   const i = data.rallies.findIndex(r => r.start <= t0 && t0 <= r.end);
-  if (i >= 0) { sel = i; renderPanel(); renderList(); }
-  else { const c = visibleCands().find(c => c.start <= t0 && t0 <= c.end); if (c) { candSel = c; renderCand(); } }
+  if (i >= 0) { sel = i; candSel = null; render(); }
+  else { const c = visibleCands().find(c => c.start <= t0 && t0 <= c.end); if (c) { candSel = c; render(); } }
   dragging = { kind: "scrub" };
   const seek = (ev) => { v.currentTime = Math.max(0, Math.min(dur, zoomTimeAt(ev, rect))); renderZoom(); renderOverview(); };
   seek(e);
   const up = () => { dragging = null; window.removeEventListener("pointermove", seek); window.removeEventListener("pointerup", up); render(); };
   window.addEventListener("pointermove", seek); window.addEventListener("pointerup", up);
+});
+$("zoom").addEventListener("dblclick", (e) => {
+  const rect = $("zoom").getBoundingClientRect(), t = zoomTimeAt(e, rect);
+  if (!data.rallies.some(r => r.status !== "deleted" && r.start <= t && t <= r.end)) addAt(t);
 });
 $("zoom").addEventListener("wheel", (e) => {
   e.preventDefault();
@@ -655,13 +709,52 @@ window.addEventListener("resize", () => renderZoom());
 
 // ── edit actions ───────────────────────────────────────────────────────────
 const nowT = () => Math.round(v.currentTime * 10) / 10;
-function setEdge(edge, t) { const r = cur(); if (!r) return; change(() => {
-  r[edge] = t; if (r.end <= r.start) { if (edge === "start") r.end = r.start + 1; else r.start = Math.max(0, r.end - 1); } }); sel = data.rallies.indexOf(r); render(); }
+function setEdge(edge, t) { const r = cur(); if (!r) return;
+  const before = r[edge];
+  change(() => {
+    r[edge] = t; if (r.end <= r.start) { if (edge === "start") r.end = r.start + 1; else r.start = Math.max(0, r.end - 1); }
+    clampRally(r);
+  });
+  if (Math.abs(r[edge] - t) > 0.05) flash(`Stopped at ${fmt(r[edge])} — rallies can't overlap.`);
+  sel = data.rallies.indexOf(r); render(); }
 function markOk() { const r = cur(); if (!r) return; change(() => r.status = "ok"); sel = data.rallies.indexOf(r); step(1); }
 function markDel() { const r = cur(); if (!r) return; change(() => r.status = r.status === "deleted" ? "auto" : "deleted"); sel = data.rallies.indexOf(r); step(1); }
-function addHere() { const t = nowT(); const prev = [...data.rallies].reverse().find(r => r.start <= t);
-  const r = { start: t, end: t + 8, set: prev ? prev.set : 1, winner: null, serve: null, status: "ok" };
-  change(() => data.rallies.push(r)); select(data.rallies.indexOf(r), false); }
+function neighbours(r) {                 // closest live rallies before / after r (excluding r)
+  const live = data.rallies.filter(x => x !== r && x.status !== "deleted");
+  return { prev: [...live].reverse().find(x => x.start < r.start) || null, next: live.find(x => x.start >= r.start) || null };
+}
+function clampRally(r) {                 // keep r between its neighbours: rallies never overlap
+  const { prev, next } = neighbours(r);
+  if (prev) r.start = Math.max(r.start, Math.round((prev.end + 0.1) * 10) / 10);
+  if (next) r.end = Math.min(r.end, Math.round((next.start - 0.1) * 10) / 10);
+  if (r.end < r.start + 0.5) r.end = r.start + 0.5;
+}
+async function suggestEnd(start, limit) {
+  try {
+    const q = `/api/${GAME}/suggest_end?start=${start}` + (limit != null ? `&limit=${limit}` : "");
+    return await (await fetch(q)).json();
+  } catch (e) { return { end: start + 8, how: "default 8 s" }; }
+}
+async function addAt(t) {
+  t = Math.round(t * 10) / 10;
+  const inside = data.rallies.find(r => r.status !== "deleted" && r.start <= t && t <= r.end);
+  if (inside) { select(data.rallies.indexOf(inside), false); flash("That's already inside a rally — selected it instead."); return; }
+  const prev = [...data.rallies].reverse().find(r => r.start <= t && r.status !== "deleted");
+  const next = data.rallies.find(r => r.start > t && r.status !== "deleted");
+  const g = await suggestEnd(t, next ? next.start - 0.1 : null);
+  const r = { start: t, end: g.end, set: prev ? prev.set : 1, winner: null, serve: null, status: "ok" };
+  change(() => { clampRally(r); data.rallies.push(r); });
+  select(data.rallies.indexOf(r), false);
+  flash(`Added ${fmt(r.start)} → ${fmt(r.end)} — end: ${g.how}. Drag the edge if it's off.`);
+}
+function addHere() { addAt(nowT()); }
+async function autoEnd() {
+  const r = cur(); if (!r) return;
+  const { next } = neighbours(r);
+  const g = await suggestEnd(r.start, next ? next.start - 0.1 : null);
+  change(() => { r.end = g.end; clampRally(r); }); sel = data.rallies.indexOf(r); render();
+  flash(`End set to ${fmt(r.end)} — ${g.how}.`);
+}
 function splitHere() { const r = cur(), t = nowT(); if (!r || t <= r.start + 0.5 || t >= r.end - 0.5) { alert("Move the playhead inside the selected rally first."); return; }
   const b = { start: t + 0.1, end: r.end, set: r.set, winner: r.winner, serve: null, status: "auto" };
   change(() => { r.end = t; r.winner = null; data.rallies.push(b); }); select(data.rallies.indexOf(r), false); }
@@ -698,11 +791,17 @@ function setFilter(f) { filter = f; for (const [id, k] of [["fAll", "all"], ["fT
 $("fAll").onclick = () => setFilter("all");
 $("fTodo").onclick = () => setFilter("todo");
 $("fCand").onclick = () => { setFilter("cand"); if (!candSel) nextCand(1); };
-$("candPlay").onclick = () => { if (!candSel) return; v.currentTime = Math.max(0, candSel.start - 1); stopAt = candSel.end + 1; v.play(); };
-$("candYes").onclick = candYes;
-$("candNo").onclick = candNo;
-$("candNext").onclick = () => nextCand(1);
-$("candClose").onclick = () => selectCand(null, false);
+function removeSelected() { if (candSel) candNo(); else markDel(); }
+$("actPlay").onclick = () => { const c = findCand(candSel);
+  if (c) { v.currentTime = Math.max(0, c.start - 1); stopAt = c.end + 1; v.play(); } else playRally(); };
+$("actAdd").onclick = addHere;
+$("actMake").onclick = candYes;
+$("actRemove").onclick = removeSelected;
+$("actOk").onclick = markOk;
+$("actStart").onclick = () => setEdge("start", nowT());
+$("actEnd").onclick = () => setEdge("end", nowT());
+$("actAutoEnd").onclick = autoEnd;
+$("actNextCand").onclick = () => nextCand(1);
 
 document.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -713,8 +812,8 @@ document.addEventListener("keydown", (e) => {
   else if (k === "ArrowRight") { e.preventDefault(); v.currentTime += e.shiftKey ? 0.2 : 2; }
   else if (k === "[") setEdge("start", nowT());
   else if (k === "]") setEdge("end", nowT());
-  else if (k === "Enter") { e.preventDefault(); markOk(); }
-  else if (k === "Delete" || k === "Backspace") { e.preventDefault(); markDel(); }
+  else if (k === "Enter") { e.preventDefault(); if (candSel) candYes(); else markOk(); }
+  else if (k === "Delete" || k === "Backspace") { e.preventDefault(); removeSelected(); }
   else if (k === "n" || k === "N") step(1);
   else if (k === "p" || k === "P") step(-1);
   else if (k === "a" || k === "A") addHere();
