@@ -206,7 +206,9 @@ def api_rallies(key):
         clean.append({"start": round(s, 2), "end": round(e, 2), "set": int(r.get("set") or 1),
                       "winner": r.get("winner") if r.get("winner") in ("home", "away") else None,
                       "serve": r.get("serve") if r.get("serve") in ("home", "away") else None,
-                      "status": r.get("status") if r.get("status") in ("auto", "ok", "deleted") else "auto"})
+                      "status": r.get("status") if r.get("status") in ("auto", "ok", "deleted") else "auto",
+                      **({"outside": True, "prevStatus": r.get("prevStatus") if r.get("prevStatus") in ("auto", "ok") else "auto"}
+                         if r.get("outside") else {})})
     clean.sort(key=lambda r: r["start"])
     dismissed = [[round(float(a), 2), round(float(b), 2)] for a, b in d.get("dismissed", []) if float(b) > float(a)]
     out = {"game": key, "saved_at": datetime.now().isoformat(timespec="seconds"),

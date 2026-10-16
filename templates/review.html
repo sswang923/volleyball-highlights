@@ -288,14 +288,32 @@ function scoreAfter() {                      // running set score after each ral
 }
 const TEAM = { home: "Tyrants", away: "Opp" };
 function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
-function change(fn) { snapshot(); fn(); sorted(); render(); queueSave(); }
+// Rallies entirely before the game start (or after the game end) are removed automatically and
+// hidden; moving the bound back brings them back with their previous status.
+function applyGameBounds() {
+  const gs = data.game_start, ge = data.game_end;
+  for (const r of data.rallies) {
+    const outside = (gs != null && r.end <= gs) || (ge != null && r.start >= ge);
+    if (outside && !r.outside) { r.prevStatus = r.status; r.status = "deleted"; r.outside = true; }
+    else if (!outside && r.outside) { r.status = r.prevStatus || "auto"; delete r.outside; delete r.prevStatus; }
+  }
+}
+const shown = (r) => !r.outside;          // outside-the-game rallies are hidden everywhere
+function change(fn) {
+  snapshot(); fn();
+  const hidden = data.rallies.filter(r => r.outside).length;
+  applyGameBounds(); sorted(); render(); queueSave();
+  const now = data.rallies.filter(r => r.outside).length;
+  if (now > hidden) flash(`${now - hidden} rall${now - hidden === 1 ? "y" : "ies"} outside the game removed.`);
+  else if (now < hidden) flash(`${hidden - now} rall${hidden - now === 1 ? "y" : "ies"} back inside the game restored.`);
+}
 
 // ── load / save ─────────────────────────────────────────────────────────────
 async function load() {
   const r = await fetch(`/api/${GAME}/rallies`); const d = await r.json();
   data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end, dismissed: d.dismissed || [] };
   fetch(`/api/${GAME}/candidates`).then(r => r.json()).then(c => { cands = c.candidates || []; render(); });
-  dur = d.duration || 1; sorted();
+  dur = d.duration || 1; applyGameBounds(); sorted();
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
   const first = data.rallies.findIndex(r => r.status === "auto");
   select(first >= 0 ? first : 0, true);
@@ -508,6 +526,7 @@ function renderOverview() {
   const w = document.createElement("div"); w.className = "window";
   w.style.left = (zoomLo / dur * 100) + "%"; w.style.width = Math.max(0.3, zoomSpan / dur * 100) + "%"; tl.appendChild(w);
   data.rallies.forEach((r, i) => {
+    if (!shown(r)) return;
     const d = document.createElement("div");
     d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
     d.style.left = (r.start / dur * 100) + "%"; d.style.width = Math.max(0.15, (r.end - r.start) / dur * 100) + "%";
@@ -537,7 +556,7 @@ function renderZoom() {
     d.style.left = X(c.start); d.style.width = ((c.end - c.start) / span * 100) + "%"; z.appendChild(d);
   }
   data.rallies.forEach((r, i) => {
-    if (r.end < lo || r.start > lo + span) return;
+    if (!shown(r) || r.end < lo || r.start > lo + span) return;
     const d = document.createElement("div");
     d.className = "seg " + (r.status === "ok" ? "ok" : r.status === "deleted" ? "deleted" : "") + (i === sel ? " sel" : "");
     d.style.left = X(r.start); d.style.width = ((r.end - r.start) / span * 100) + "%";
@@ -608,7 +627,7 @@ function renderList() {
   };
 
   // one ordered stream of rallies and possible rallies
-  const items = data.rallies.map((r, i) => ({ kind: "rally", r, i, t: r.start }));
+  const items = data.rallies.map((r, i) => ({ kind: "rally", r, i, t: r.start })).filter(it => shown(it.r));
   if (filter !== "todo") for (const c of visibleCands()) items.push({ kind: "cand", c, t: c.start });
   items.sort((a, b) => a.t - b.t);
 
