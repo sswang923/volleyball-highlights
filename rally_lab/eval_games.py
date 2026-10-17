@@ -38,13 +38,18 @@ def baseline_prob(key):
     return np.load(p if p.exists() else WORK / key / "signals.npz")["fused"]
 
 
-def train(keys):
+def prep(F, key, views):
+    Fn = dv.norm(F)
+    return dv.with_view(Fn, dv.camera(key)) if views else Fn
+
+
+def train(keys, views=False):
     Fs, ys = [], []
     for k in keys:
         d, gold, _ = tl.truth(k)
         _, b, F = al.features(k)
         inside, y = tl.bin_labels(b, d, gold)
-        Fs.append(dv.norm(F)[inside]); ys.append(y[inside])
+        Fs.append(prep(F, k, views)[inside]); ys.append(y[inside])
     return tl.fit_logistic(np.concatenate(Fs), np.concatenate(ys), iters=600, lr=0.05, l2=1e-2)
 
 
@@ -100,10 +105,11 @@ def main():
         return f"{len(segs):3d} rallies, off by {r['count_mae']:.2f} on average (bias {r['count_bias']:+.2f})"
 
     print(f"    original detector             : {count_err(s2['fused'], SEG_OLD)}")
-    for keys in (["20261004_game03"], ["20261004_game04"], REVIEWED):
-        m = train(keys)
-        p = sg.smooth(np.asarray(m(dv.norm(F2)), np.float32), 3)
-        print(f"    V-JEPA trained on {'+'.join(k[-2:] for k in keys):10s}: {count_err(p, SEG_NEW)}")
+    for keys, views in ((["20261004_game03"], False), (["20261004_game04"], False), (REVIEWED, False), (REVIEWED, True)):
+        m = train(keys, views)
+        p = sg.smooth(np.asarray(m(prep(F2, "20261004_game02", views)), np.float32), 3)
+        tag = "+".join(k[-2:] for k in keys) + (" +camera" if views else "")
+        print(f"    V-JEPA trained on {tag:17s}: {count_err(p, SEG_NEW)}")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,23 @@ import train_live as tl     # noqa: E402
 SEG = dict(hi=0.5, lo=0.3, min_len=3.0, merge_gap=3.0)
 
 
+VIEWS = ("endline", "sideline")
+
+
+def camera(key):
+    """Camera angle of a game from labels/<game>/game.json ("endline" if not set)."""
+    p = pl.REPO / "labels" / key / "game.json"
+    return json.load(open(p)).get("camera", "endline") if p.exists() else "endline"
+
+
+def with_view(Fn, view):
+    """Shared + per-camera-angle copies of the (already normalised) inputs, so the classifier learns
+    what holds for every angle plus what is specific to each. A game from an angle with no training
+    data simply uses the shared part."""
+    blocks = [Fn] + [Fn if v == view else np.zeros_like(Fn) for v in VIEWS]
+    return np.concatenate(blocks, 1)
+
+
 def norm(F):
     """Each input relative to its own game's average and spread. Without this the classifier's
     confidence drifts between games (lighting, time of day): trained on game 3 it called 76% of
@@ -60,7 +77,7 @@ def split_long_sets(spans, segs):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", required=True)
-    ap.add_argument("--train", nargs="+", default=["20261004_game03"])
+    ap.add_argument("--train", nargs="+", default=["20261004_game03", "20261004_game04"])
     ap.add_argument("--set-scores", default="")
     a = ap.parse_args()
     if a.target in a.train:
@@ -71,12 +88,12 @@ def main():
         d, gold, _ = tl.truth(key)
         _, bins_tr, F_tr = al.features(key)
         inside, y = tl.bin_labels(bins_tr, d, gold)
-        Fs.append(norm(F_tr)[inside]); ys.append(y[inside])
+        Fs.append(with_view(norm(F_tr), camera(key))[inside]); ys.append(y[inside])
     model = tl.fit_logistic(np.concatenate(Fs), np.concatenate(ys), iters=600, lr=0.05, l2=1e-2)
 
     g = pl.Game(a.target)
     s, bins, F = al.features(a.target)
-    prob = sg.smooth(np.asarray(model(norm(F)), np.float32), 3)
+    prob = sg.smooth(np.asarray(model(with_view(norm(F), camera(a.target))), np.float32), 3)
     spans = s["spans"].tolist()
     totals = [h + w for h, w in pl.parse_set_scores(a.set_scores)]
 
