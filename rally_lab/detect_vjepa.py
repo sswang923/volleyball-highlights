@@ -35,7 +35,7 @@ def norm(F):
     return (F - F.mean(0)) / (F.std(0) + 1e-6)
 
 
-MAX_SET_RALLIES, MIN_BREAK_S = 55, 45.0
+MAX_SET_RALLIES, MIN_BREAK_S = 65, 60.0   # timeouts run ~30-60 s; deuce sets can pass 50 rallies
 
 
 def split_long_sets(spans, segs):
