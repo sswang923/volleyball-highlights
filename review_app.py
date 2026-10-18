@@ -208,6 +208,8 @@ def api_rallies(key):
     if request.method == "GET":
         d = load_review(key)
         d["duration"] = duration(video_path(key))
+        gj = LABELS / key / "game.json"          # team name / camera angle for this game
+        d["team"] = (json.load(open(gj)).get("team") if gj.exists() else None) or "Tyrants"
         return jsonify(d)
     d = request.get_json(force=True) or {}
     clean = []

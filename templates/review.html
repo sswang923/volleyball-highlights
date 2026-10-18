@@ -320,7 +320,7 @@ function scoreAfter() {                      // running set score after each ral
     out.set(r, [...s]); }
   return out;
 }
-const TEAM = { home: "Tyrants", away: "Opp" };
+const TEAM = { home: "Tyrants", away: "Opp" };   // home name comes from labels/<game>/game.json
 function snapshot() { undoStack.push(JSON.stringify(data)); if (undoStack.length > 200) undoStack.shift(); }
 // Set marks: data.sets = [{start, end}] in time order, set number = position + 1.
 // A rally belongs to the last set that starts at or before it. Between one set's end and the next
@@ -457,6 +457,8 @@ async function load() {
   data = { rallies: d.rallies || [], game_start: d.game_start, game_end: d.game_end, dismissed: d.dismissed || [], sets: d.sets || [] };
   fetch(`/api/${GAME}/candidates`).then(r => r.json()).then(c => { cands = c.candidates || []; render(); });
   dur = d.duration || 1; applyGameBounds(); sorted();
+  TEAM.home = d.team || "Tyrants";                     // e.g. "Bay to Bay" for the Oct 17 games
+  document.querySelectorAll('[data-serve="home"], [data-win="home"]').forEach(b => b.textContent = TEAM.home);
   $("saveState").textContent = d.source ? "loaded " + d.source : "no detections yet";
   let resumeAt = null;
   try { resumeAt = parseFloat(localStorage.getItem(`review.pos.${GAME}`)); } catch (e) {}
@@ -765,7 +767,7 @@ function renderPanel() {
     document.querySelectorAll("[data-serve]").forEach(b => b.classList.toggle("on", (r.serve || "") === b.dataset.serve));
     $("serveNote").textContent = r.serve ? "" : "unknown — watch the serve and tap";
     $("winNote").textContent = w && w.who ? `${TEAM[w.who]} (${w.how === "you" ? "your pick" : "from the next serve"})` +
-      (sc ? ` · score after: Tyrants ${sc[0]}–${sc[1]}` : "") : (w ? `unknown (${w.how})` : "");
+      (sc ? ` · score after: ${TEAM.home} ${sc[0]}–${sc[1]}` : "") : (w ? `unknown (${w.how})` : "");
   }
   $("gameTimes").textContent = `game ${fmt(data.game_start)} → ${fmt(data.game_end)}`;
   const live = data.rallies.filter(x => x.status !== "deleted"), okc = live.filter(x => x.status === "ok").length;
@@ -832,7 +834,7 @@ function renderList() {
       curSet = n;
       const lastR = [...data.rallies].reverse().find(r => r.set === n && shown(r) && sc.get(r));
       const s0 = lastR ? sc.get(lastR) : null;
-      const head = el("div", "ev-set", `Set ${n}` + (s0 ? ` <span class="times">· Tyrants ${s0[0]}–${s0[1]}</span>` : ""));
+      const head = el("div", "ev-set", `Set ${n}` + (s0 ? ` <span class="times">· ${TEAM.home} ${s0[0]}–${s0[1]}</span>` : ""));
       const row = el("div", "setrow");
       const nowBtn = (label, fn) => { const b = el("button", "", label); b.onclick = (e) => { e.stopPropagation(); fn(); }; return b; };
       row.append("start", timeInput(x.start, (t) => { if (t == null) return; change(() => { x.start = t; sortSets(); }); }),
@@ -848,7 +850,7 @@ function renderList() {
     if (it.kind === "rally" && !marked && it.r.set !== curSet && filter !== "cand") {
       curSet = it.r.set;
       const s0 = sc.get([...data.rallies].reverse().find(x => x.set === curSet && sc.get(x)));
-      list.append(el("div", "ev-set", `Set ${curSet}` + (s0 ? ` <span class="times">· Tyrants ${s0[0]}–${s0[1]}</span>` : "")));
+      list.append(el("div", "ev-set", `Set ${curSet}` + (s0 ? ` <span class="times">· ${TEAM.home} ${s0[0]}–${s0[1]}</span>` : "")));
     }
     if (it.kind === "cand") {
       const c = it.c, row = el("div", "ev cand" + (sameCand(c, candSel) ? " sel" : ""));
@@ -883,8 +885,8 @@ function renderList() {
     const pick = (label, field, val, title) => { const x = el("button", r[field] === val ? "on" : "", label); x.title = title;
       x.onclick = (e) => { e.stopPropagation(); change(() => r[field] = r[field] === val ? null : val); }; return x; };
     const after = sc.get(r);
-    meta.append("serve", pick("T", "serve", "home", "Tyrants served"), pick("O", "serve", "away", "Opponent served"),
-                " won", pick("T", "winner", "home", "Tyrants won the point"), pick("O", "winner", "away", "Opponent won the point"),
+    meta.append("serve", pick("T", "serve", "home", `${TEAM.home} served`), pick("O", "serve", "away", "Opponent served"),
+                " won", pick("T", "winner", "home", `${TEAM.home} won the point`), pick("O", "winner", "away", "Opponent won the point"),
                 ww && ww.who && !r.winner ? ` → ${TEAM[ww.who]}*` : "", after ? `  ${after[0]}–${after[1]}` : "",
                 r.status === "ok" ? "  ✓ checked" : "");
     row.append(meta);
