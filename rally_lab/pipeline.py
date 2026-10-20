@@ -90,7 +90,8 @@ def step_proxy(g):
         emit("proxy", "failed", error=f"{g.stitched.name} not found — stitch the game first")
         raise SystemExit(1)
     tmp = g.dir / "proxy.tmp.mp4"
-    run(f"ffmpeg-nvenc -v error -y -hwaccel cuda -i '{g.stitched}' -vf scale=1280:720,fps=30 "
+    # format=yuv420p: HLG 10-bit footage (Oct 18 on) does not fit the 8-bit encoder; HLG viewed as SDR looks like the old footage
+    run(f"ffmpeg-nvenc -v error -y -hwaccel cuda -i '{g.stitched}' -vf scale=1280:720,fps=30,format=yuv420p "
         f"-c:v h264_nvenc -preset p4 -cq 23 -c:a aac -b:a 128k '{tmp}' && mv '{tmp}' '{g.proxy}'", "proxy")
 
 
